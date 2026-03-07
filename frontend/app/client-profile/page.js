@@ -1,8 +1,9 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import Link from 'next/link'
-import apiClient from '@/lib/apiClient'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/hooks/useAuth'
 import completionClient from '@/lib/completionClient'
 import RatingModal from '@/components/RatingModal'
 import DeclineReasonModal from '@/components/DeclineReasonModal'
@@ -12,6 +13,7 @@ import { togoLocations, handworks } from '@/lib/togoData'
 
 export default function ClientProfilePage() {
     const { t } = useLanguage()
+    const { user, isLoading: authLoading } = useAuth({ requiredRole: 'client' })
     const [profile, setProfile] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -23,12 +25,15 @@ export default function ClientProfilePage() {
         phoneNumber: '',
         location: '',
         bio: '',
-        profilePicture: null
+        profilePicture: null,
+        portfolio: []
     })
     const [updateLoading, setUpdateLoading] = useState(false)
     const [updateError, setUpdateError] = useState(null)
     const [updateSuccess, setUpdateSuccess] = useState(false)
     const [profilePicturePreview, setProfilePicturePreview] = useState(null)
+    const [portfolioFiles, setPortfolioFiles] = useState([])
+    const [newPortfolioImages, setNewPortfolioImages] = useState([])
 
     // Job posting states
     const [jobs, setJobs] = useState([])
@@ -59,35 +64,28 @@ export default function ClientProfilePage() {
     const [ratingCompletionId, setRatingCompletionId] = useState(null)
     const [showDeclineModal, setShowDeclineModal] = useState(false)
     const [declineCompletionId, setDeclineCompletionId] = useState(null)
+    const timeoutsRef = useRef([])
+
+    // Cleanup all timeouts on unmount
+    useEffect(() => {
+        return () => {
+            timeoutsRef.current.forEach(id => clearTimeout(id))
+        }
+    }, [])
 
     useEffect(() => {
-        const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
-        const userData = typeof window !== 'undefined' ? localStorage.getItem('user') : null
+        if (authLoading) return
 
-        if (!token) {
-            window.location.href = '/login'
+        if (!user) {
+            // useAuth will handle redirect
             return
         }
 
-        // Check if user is a client, if not redirect to choose role
-        if (userData) {
-            const user = JSON.parse(userData)
-            if (!user.userType) {
-                window.location.href = '/choose-role'
-                return
-            } else if (user.userType !== 'client') {
-                // User is a worker, redirect to worker profile
-                window.location.href = '/worker-profile'
-                return
-            }
-        }
-
-        apiClient.setToken(token)
+        let isMounted = true
+        let timeoutId
+        let warningTimeoutId
 
         async function fetchData() {
-            let timeoutId;
-            let warningTimeoutId;
-
             try {
                 setLoading(true)
                 setJobsLoading(true)
@@ -96,103 +94,181 @@ export default function ClientProfilePage() {
 
                 // Show timeout warning after 20 seconds
                 warningTimeoutId = setTimeout(() => {
-                    setTimeoutWarning(true)
+                    if (isMounted) setTimeoutWarning(true)
                 }, 20000)
 
                 // Main timeout after 30 seconds
                 timeoutId = setTimeout(() => {
-                    setLoading(false)
-                    setJobsLoading(false)
-                    setError('Profile took too long to load. Please refresh the page.')
+                    if (isMounted) {
+                        setLoading(false)
+                        setJobsLoading(false)
+                        setError('Profile took too long to load. Please refresh the page.')
+                    }
                 }, 30000)
 
-                // Fetch profile and jobs in parallel for better performance
-                const [profileRes, jobsRes] = await Promise.all([
-                    apiClient.getUserProfile(),
-                    apiClient.getMyJobs()
+                // Fetch all data in parallel for fast loading
+                const results = await Promise.allSettled([
+                    // Profile information
+                    supabase
+                        .from('users')
+                        .select('id,email,first_name,last_name,phone_number,location,bio,portfolio,rating,user_type,completed_jobs')
+                        .eq('id', user.id)
+                        .single(),
+
+                    // Jobs posted by this client
+                    supabase
+                        .from('jobs')
+                        .select('id,title,description,budget,location,status,job_type,salary,client_id,created_at,updated_at')
+                        .eq('client_id', user.id)
+                        .order('created_at', { ascending: false }),
+
+                    // Ratings received from workers
+                    supabase
+                        .from('reviews')
+                        .select('id,rating,comment,created_at,rater_type,worker_id')
+                        .eq('client_id', user.id)
+                        .eq('rater_type', 'worker')
+                        .order('created_at', { ascending: false }),
+
+                    // Applications for client's jobs
+                    supabase
+                        .from('applications')
+                        .select('id,job_id,worker_id,status,proposed_price,message,created_at')
+                        .order('created_at', { ascending: false })
+                        .limit(100)
                 ])
 
                 clearTimeout(timeoutId)
                 clearTimeout(warningTimeoutId)
 
-                const userData = profileRes.data.user || profileRes.data
-                setProfile(userData)
-                if (userData.profilePicture) {
-                    setProfilePicturePreview(userData.profilePicture)
+                if (!isMounted) return
+
+                // Extract individual results from Promise.allSettled
+                let profileRes = { data: null, error: null }
+                let jobsRes = { data: null, error: null }
+                let ratingsRes = { data: null, error: null }
+                let applicantsRes = { data: null, error: null }
+
+                if (results[0].status === 'fulfilled') {
+                    profileRes = results[0].value
+                } else {
+                    profileRes.error = results[0].reason
                 }
+
+                if (results[1].status === 'fulfilled') {
+                    jobsRes = results[1].value
+                } else {
+                    jobsRes.error = results[1].reason
+                }
+
+                if (results[2].status === 'fulfilled') {
+                    ratingsRes = results[2].value
+                } else {
+                    ratingsRes.error = results[2].reason
+                }
+
+                if (results[3].status === 'fulfilled') {
+                    applicantsRes = results[3].value
+                } else {
+                    applicantsRes.error = results[3].reason
+                }
+
+                // Log any query errors for debugging
+                if (profileRes.error) console.error('Profile fetch error:', profileRes.error)
+                if (jobsRes.error) console.error('Jobs fetch error:', jobsRes.error)
+                if (ratingsRes.error) console.error('Ratings fetch error:', ratingsRes.error)
+                if (applicantsRes.error) console.error('Applicants fetch error:', applicantsRes.error)
+
+                // Handle profile data (required)
+                if (profileRes.error) throw new Error(`Failed to fetch profile: ${profileRes.error.message}`)
+
+                const userData = profileRes.data
+                setProfile(userData)
+                if (userData.portfolio && userData.portfolio.length > 0) {
+                    setProfilePicturePreview(userData.portfolio[0])
+                }
+
+                // Parse portfolio/gallery if it's a JSON string
+                let portfolioData = userData.portfolio || []
+                if (typeof portfolioData === 'string') {
+                    try {
+                        portfolioData = JSON.parse(portfolioData)
+                    } catch (e) {
+                        portfolioData = []
+                    }
+                }
+
                 setFormData({
-                    firstName: userData.firstName || '',
-                    lastName: userData.lastName || '',
+                    firstName: userData.first_name || '',
+                    lastName: userData.last_name || '',
                     email: userData.email || '',
-                    phoneNumber: userData.phoneNumber || '',
+                    phoneNumber: userData.phone_number || '',
                     location: userData.location || '',
                     bio: userData.bio || '',
-                    profilePicture: userData.profilePicture || null
+                    profilePicture: userData.portfolio && userData.portfolio.length > 0 ? userData.portfolio[0] : null,
+                    portfolio: portfolioData
                 })
 
-                setJobs(jobsRes.data.jobs || [])
-                setTimeoutWarning(false)
+                // Handle jobs data (optional)
+                const jobsData = (jobsRes.data && !jobsRes.error) ? jobsRes.data : []
+                setJobs(jobsData)
 
-                // Extract completion status from jobs that now include worker_id
-                const completionStatusMap = {}
-                const jobsWithCompletions = jobsRes.data.jobs?.filter(job => job.worker_id && job.completion_id) || []
-                jobsWithCompletions.forEach(job => {
-                    completionStatusMap[job.id] = {
-                        id: job.completion_id,
-                        job_id: job.id,
-                        worker_id: job.worker_id,
-                        status: job.completion_status
-                    }
-                })
-                if (Object.keys(completionStatusMap).length > 0) {
-                    setCompletionStatus(completionStatusMap)
-                    console.log('Completion status from jobs:', completionStatusMap)
-                }
+                // Handle ratings data (optional)
+                const ratingsData = (ratingsRes.data && !ratingsRes.error) ? ratingsRes.data : []
+                // Ratings are handled by the RatingsDisplay component
 
-                // Fetch applicants for all jobs
-                try {
-                    const applicantsRes = await apiClient.getAllJobApplicants()
-                    const applicantsMap = {}
-                    if (applicantsRes.data.applications) {
-                        applicantsRes.data.applications.forEach(applicant => {
-                            if (!applicantsMap[applicant.job_id]) {
-                                applicantsMap[applicant.job_id] = []
-                            }
-                            applicantsMap[applicant.job_id].push(applicant)
-                        })
-                    }
-                    setJobApplicants(applicantsMap)
-                } catch (err) {
-                    console.error('Failed to fetch applicants', err)
-                    setApplicantsError('Failed to load applicants')
+                // Handle applicants data (optional)
+                const applicantsMap = {}
+                if (applicantsRes.data && !applicantsRes.error) {
+                    applicantsRes.data.forEach(applicant => {
+                        if (!applicantsMap[applicant.job_id]) {
+                            applicantsMap[applicant.job_id] = []
+                        }
+                        applicantsMap[applicant.job_id].push(applicant)
+                    })
                 }
+                setJobApplicants(applicantsMap)
             } catch (err) {
                 clearTimeout(timeoutId)
                 clearTimeout(warningTimeoutId)
 
-                console.error('Failed to fetch data', err)
+                if (!isMounted) return
+
+                console.error('Failed to fetch data:', err)
+                console.error('Error details:', {
+                    message: err.message,
+                    code: err.code,
+                    status: err.status,
+                    details: err.details
+                })
 
                 let errorMessage = 'Failed to load profile'
                 if (err.code === 'ECONNABORTED') {
                     errorMessage = 'Request timeout. The server is not responding. Please check your connection.'
                 } else if (err.message === 'Network Error') {
                     errorMessage = 'Network error. Please check your internet connection.'
-                } else if (err.response?.status === 401) {
-                    errorMessage = 'Unauthorized. Please login again.'
-                } else if (err.response?.status === 500) {
-                    errorMessage = 'Server error. Please try again later.'
+                } else if (err.message) {
+                    errorMessage = err.message
                 }
 
                 setError(errorMessage)
                 setTimeoutWarning(false)
             } finally {
-                setLoading(false)
-                setJobsLoading(false)
+                if (isMounted) {
+                    setLoading(false)
+                    setJobsLoading(false)
+                }
             }
         }
 
         fetchData()
-    }, [])
+
+        return () => {
+            isMounted = false
+            clearTimeout(timeoutId)
+            clearTimeout(warningTimeoutId)
+        }
+    }, [authLoading, user, t])
 
     // Handle email resend cooldown timer
     useEffect(() => {
@@ -227,6 +303,35 @@ export default function ClientProfilePage() {
         }
     }
 
+    const handlePortfolioChange = (e) => {
+        const files = Array.from(e.target.files || [])
+
+        files.forEach(file => {
+            const reader = new FileReader()
+            reader.onloadend = () => {
+                const dataUrl = reader.result
+                setFormData(prev => ({
+                    ...prev,
+                    portfolio: [...prev.portfolio, dataUrl]
+                }))
+                setNewPortfolioImages(prev => [...prev, {
+                    name: file.name,
+                    url: dataUrl,
+                    file: file
+                }])
+            }
+            reader.readAsDataURL(file)
+        })
+    }
+
+    const handleRemovePortfolio = (idx) => {
+        setFormData({
+            ...formData,
+            portfolio: formData.portfolio.filter((_, i) => i !== idx)
+        })
+        setNewPortfolioImages(newPortfolioImages.filter((_, i) => i !== idx))
+    }
+
     const handleJobInputChange = (e) => {
         const { name, value } = e.target
         setJobFormData({
@@ -241,24 +346,49 @@ export default function ClientProfilePage() {
         setJobFormSuccess(false)
 
         try {
+            const jobPayload = {
+                title: jobFormData.title,
+                description: jobFormData.description,
+                budget: jobFormData.salary,
+                location: jobFormData.location,
+                category: jobFormData.jobType,
+                client_id: user.id
+            }
+
             if (editingJobId) {
                 // Update existing job
-                const res = await apiClient.updateJob(editingJobId, jobFormData)
-                setJobs(jobs.map(j => j.id === editingJobId ? res.data : j))
+                const { data, error } = await supabase
+                    .from('jobs')
+                    .update(jobPayload)
+                    .eq('id', editingJobId)
+                    .select()
+                    .single()
+
+                if (error) throw error
+
+                setJobs(jobs.map(j => j.id === editingJobId ? data : j))
                 setEditingJobId(null)
             } else {
                 // Create new job
-                const res = await apiClient.createJob(jobFormData)
-                setJobs([res.data, ...jobs])
+                const { data, error } = await supabase
+                    .from('jobs')
+                    .insert(jobPayload)
+                    .select()
+                    .single()
+
+                if (error) throw error
+
+                setJobs([data, ...jobs])
             }
 
             setJobFormData({ title: '', description: '', location: '', jobType: '', salary: '' })
             setShowJobModal(false)
             setJobFormSuccess(true)
-            setTimeout(() => setJobFormSuccess(false), 3000)
+            const id = setTimeout(() => setJobFormSuccess(false), 3000)
+            timeoutsRef.current.push(id)
         } catch (err) {
             console.error('Failed to save job', err)
-            setJobFormError(err.response?.data?.error || 'Failed to save job')
+            setJobFormError(err.message || 'Failed to save job')
         }
     }
 
@@ -278,7 +408,13 @@ export default function ClientProfilePage() {
         if (!window.confirm('Are you sure you want to delete this project?')) return
 
         try {
-            await apiClient.deleteJob(jobId)
+            const { error } = await supabase
+                .from('jobs')
+                .delete()
+                .eq('id', jobId)
+
+            if (error) throw error
+
             setJobs(jobs.filter(j => j.id !== jobId))
         } catch (err) {
             console.error('Failed to delete job', err)
@@ -288,7 +424,13 @@ export default function ClientProfilePage() {
 
     const handleUpdateApplicationStatus = async (appId, newStatus) => {
         try {
-            await apiClient.updateApplicationStatus(appId, newStatus)
+            const { error } = await supabase
+                .from('applications')
+                .update({ status: newStatus })
+                .eq('id', appId)
+
+            if (error) throw error
+
             // Update the applicants state
             const updatedApplicants = { ...jobApplicants }
             for (const jobId in updatedApplicants) {
@@ -310,27 +452,39 @@ export default function ClientProfilePage() {
         setUpdateSuccess(false)
 
         try {
+            // Portfolio data is already in the correct format (data URLs or strings)
+            const portfolioData = formData.portfolio.filter(p => p && typeof p === 'string')
+
             const updatePayload = {
-                firstName: formData.firstName,
-                lastName: formData.lastName,
-                phoneNumber: formData.phoneNumber,
+                first_name: formData.firstName,
+                last_name: formData.lastName,
+                phone_number: formData.phoneNumber,
                 location: formData.location,
                 bio: formData.bio,
-                profilePicture: formData.profilePicture
+                portfolio: portfolioData
             }
 
-            const res = await apiClient.updateUserProfile(updatePayload)
-            const updatedUser = res.data.user || res.data
+            const { data, error } = await supabase
+                .from('users')
+                .update(updatePayload)
+                .eq('id', user.id)
+                .select()
+                .single()
+
+            if (error) throw error
+
+            const updatedUser = data
             setProfile(updatedUser)
-            if (updatedUser.profilePicture) {
-                setProfilePicturePreview(updatedUser.profilePicture)
+            if (updatedUser.portfolio && updatedUser.portfolio.length > 0) {
+                setProfilePicturePreview(updatedUser.portfolio[0])
             }
             setIsEditing(false)
             setUpdateSuccess(true)
-            setTimeout(() => setUpdateSuccess(false), 3000)
+            const id = setTimeout(() => setUpdateSuccess(false), 3000)
+            timeoutsRef.current.push(id)
         } catch (err) {
             console.error('Failed to update profile', err)
-            setUpdateError(err.response?.data?.error || 'Failed to update profile')
+            setUpdateError(err.message || 'Failed to update profile')
         } finally {
             setUpdateLoading(false)
         }
@@ -341,32 +495,11 @@ export default function ClientProfilePage() {
         setVerifyingEmail(true)
         setEmailVerificationError('')
         try {
-            const token = localStorage.getItem('token')
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/verify-email`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ verificationCode: emailVerificationCode })
-            })
-
-            if (!response.ok) {
-                const data = await response.json()
-                throw new Error(data.error || 'Verification failed')
-            }
-
-            // Update profile to show email verified
-            const userData = JSON.parse(localStorage.getItem('user') || '{}')
-            userData.emailVerified = true
-            localStorage.setItem('user', JSON.stringify(userData))
-
-            setProfile(prev => ({ ...prev, emailVerified: true }))
-            setEmailVerificationCode('')
-            setUpdateSuccess(true)
-            setTimeout(() => setUpdateSuccess(false), 3000)
+            // Email verification is handled by Supabase via email links
+            // This function is kept for compatibility but not used
+            setEmailVerificationError('Email verification is handled automatically via the link sent to your email.')
         } catch (err) {
-            setEmailVerificationError(err.message || 'Failed to verify email')
+            setEmailVerificationError(err.message || 'Verification not available')
         } finally {
             setVerifyingEmail(false)
         }
@@ -376,23 +509,17 @@ export default function ClientProfilePage() {
         setEmailResendLoading(true)
         setEmailVerificationError('')
         try {
-            const token = localStorage.getItem('token')
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/resend-verification-email`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                }
+            const { error } = await supabase.auth.resend({
+                type: 'signup',
+                email: user.email
             })
 
-            if (!response.ok) {
-                const data = await response.json()
-                throw new Error(data.error || 'Failed to resend code')
-            }
+            if (error) throw error
 
             setUpdateSuccess(true)
             setEmailResendCooldown(60)
-            setTimeout(() => setUpdateSuccess(false), 3000)
+            const id = setTimeout(() => setUpdateSuccess(false), 3000)
+            timeoutsRef.current.push(id)
         } catch (err) {
             setEmailVerificationError(err.message || 'Failed to resend verification code')
         } finally {
@@ -414,10 +541,12 @@ export default function ClientProfilePage() {
             setRatingCompletionId(completionId)
             setShowRatingModal(true)
             setUpdateSuccess(true)
-            setTimeout(() => setUpdateSuccess(false), 3000)
+            const id1 = setTimeout(() => setUpdateSuccess(false), 3000)
+            timeoutsRef.current.push(id1)
         } catch (err) {
             setUpdateError(err.message || 'Failed to confirm completion')
-            setTimeout(() => setUpdateError(null), 3000)
+            const id2 = setTimeout(() => setUpdateError(null), 3000)
+            timeoutsRef.current.push(id2)
         }
     }
 
@@ -534,7 +663,7 @@ export default function ClientProfilePage() {
                     )}
 
                     {/* Email Verification Section */}
-                    {profile && !profile.emailVerified && (
+                    {profile && !profile.email_verified && (
                         <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6 rounded-r">
                             <div className="flex items-start">
                                 <div className="flex-1">
@@ -608,10 +737,10 @@ export default function ClientProfilePage() {
                                 </div>
                                 <div>
                                     <p className="text-lg font-semibold text-gray-900">
-                                        {profile?.firstName} {profile?.lastName}
+                                        {profile?.first_name} {profile?.last_name}
                                     </p>
                                     <p className="text-gray-600 text-sm mt-1">{profile?.location || t('notProvided')}</p>
-                                    <p className="text-sm text-gray-500 mt-2">{t('memberSince').replace('{{date}}', new Date(profile?.createdAt).toLocaleDateString())}</p>
+                                    <p className="text-sm text-gray-500 mt-2">{t('memberSince').replace('{{date}}', new Date(profile?.created_at).toLocaleDateString())}</p>
                                 </div>
                             </div>
                         </div>
@@ -622,11 +751,11 @@ export default function ClientProfilePage() {
                             <div className="grid grid-cols-2 gap-6">
                                 <div>
                                     <label className="text-sm font-medium text-gray-700">{t('firstName')}</label>
-                                    <p className="text-gray-900 mt-1">{profile?.firstName || t('notProvided')}</p>
+                                    <p className="text-gray-900 mt-1">{profile?.first_name || t('notProvided')}</p>
                                 </div>
                                 <div>
                                     <label className="text-sm font-medium text-gray-700">{t('lastName')}</label>
-                                    <p className="text-gray-900 mt-1">{profile?.lastName || t('notProvided')}</p>
+                                    <p className="text-gray-900 mt-1">{profile?.last_name || t('notProvided')}</p>
                                 </div>
                                 <div>
                                     <label className="text-sm font-medium text-gray-700">{t('email')}</label>
@@ -634,7 +763,7 @@ export default function ClientProfilePage() {
                                 </div>
                                 <div>
                                     <label className="text-sm font-medium text-gray-700">{t('phoneNumber')}</label>
-                                    <p className="text-gray-900 mt-1">{profile?.phoneNumber || t('notProvided')}</p>
+                                    <p className="text-gray-900 mt-1">{profile?.phone_number || t('notProvided')}</p>
                                 </div>
                                 <div>
                                     <label className="text-sm font-medium text-gray-700">{t('location')}</label>
@@ -651,6 +780,36 @@ export default function ClientProfilePage() {
                                 <p className="text-gray-900 mt-2 whitespace-pre-wrap">
                                     {profile?.bio || t('notProvided')}
                                 </p>
+                            </div>
+                        </div>
+
+                        {/* Portfolio/Gallery Section */}
+                        <div className="bg-white shadow rounded-lg p-8">
+                            <h2 className="text-xl font-semibold mb-6">{t('portfolio')}</h2>
+                            <div className="grid grid-cols-3 gap-4">
+                                {(profile?.portfolio || []).length === 0 ? (
+                                    <span className="text-gray-500">{t('noPortfolioImages')}</span>
+                                ) : (
+                                    (profile?.portfolio || []).map((img, idx) => {
+                                        // Handle both array of strings and array of objects
+                                        const imageUrl = typeof img === 'string' ? img : (img?.url || img?.name || '')
+                                        const isValidImage = imageUrl && (imageUrl.startsWith('data:image/') || /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(imageUrl))
+
+                                        return (
+                                            <div key={idx} className="bg-gray-100 h-40 rounded-lg flex items-center justify-center overflow-hidden border border-gray-200">
+                                                {isValidImage ? (
+                                                    <img src={imageUrl} alt={t('portfolio')} className="w-full h-full object-cover" onError={(e) => {
+                                                        e.target.style.display = 'none'
+                                                        e.target.nextSibling.style.display = 'flex'
+                                                    }} />
+                                                ) : null}
+                                                <div className="w-full h-full flex items-center justify-center text-gray-400 text-sm text-center p-2 bg-gray-50" style={{ display: isValidImage ? 'none' : 'flex' }}>
+                                                    {t('noImage')}
+                                                </div>
+                                            </div>
+                                        )
+                                    })
+                                )}
                             </div>
                         </div>
 
@@ -905,6 +1064,48 @@ export default function ClientProfilePage() {
                                 </>
                             )}
                         </div>
+
+                        {/* Completed Projects Section */}
+                        <div className="bg-white shadow rounded-lg p-8">
+                            <h2 className="text-xl font-semibold mb-6">{t('completedJobs')}</h2>
+
+                            {jobs.filter(job => job.completions && job.completions.length > 0 && job.completions[0].status === 'confirmed').length === 0 ? (
+                                <div className="text-center py-12">
+                                    <div className="text-4xl mb-4">🏆</div>
+                                    <p className="text-gray-600">{t('noCompletedProjects')}</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-4">
+                                    {jobs.filter(job => job.completions && job.completions.length > 0 && job.completions[0].status === 'confirmed').map(job => {
+                                        const completion = job.completions[0]
+                                        return (
+                                            <div key={job.id} className="border border-gray-200 rounded-lg p-6 bg-green-50">
+                                                <div className="flex justify-between items-start mb-2">
+                                                    <div>
+                                                        <h3 className="text-lg font-semibold text-gray-900">{job.title}</h3>
+                                                        <p className="text-sm text-gray-600 mt-1">{job.location}</p>
+                                                    </div>
+                                                    <span className="px-3 py-1 bg-green-100 text-green-800 rounded-full text-xs font-medium">
+                                                        ✓ {t('completed')}
+                                                    </span>
+                                                </div>
+                                                <p className="text-gray-700 mt-3">{job.description}</p>
+                                                <div className="flex gap-6 mt-4 pt-4 border-t border-gray-200">
+                                                    <div>
+                                                        <span className="text-xs font-medium text-gray-600 uppercase">{t('finalPrice')}</span>
+                                                        <p className="text-sm text-gray-900 mt-1 font-semibold">CFA {completion.final_price || job.salary}</p>
+                                                    </div>
+                                                    <div>
+                                                        <span className="text-xs font-medium text-gray-600 uppercase">{t('completedOn')}</span>
+                                                        <p className="text-sm text-gray-900 mt-1">{new Date(completion.completion_date).toLocaleDateString()}</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        )
+                                    })}
+                                </div>
+                            )}
+                        </div>
                     </div>
                 ) : (
                     // Edit Mode
@@ -1015,6 +1216,43 @@ export default function ClientProfilePage() {
                                 />
                                 <p className="text-xs text-gray-500 mt-2">{t('helpServiceProviders')}</p>
                             </div>
+                        </div>
+
+                        {/* Edit Portfolio Section */}
+                        <div className="bg-white shadow rounded-lg p-8">
+                            <h2 className="text-xl font-semibold mb-6">{t('portfolio')}</h2>
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-2">{t('uploadClearPhotosLabel')}</label>
+                                <input
+                                    type="file"
+                                    accept="image/*"
+                                    multiple
+                                    onChange={handlePortfolioChange}
+                                    className="block text-sm text-gray-500 border border-gray-300 rounded px-3 py-2"
+                                />
+                                <p className="text-xs text-gray-500 mt-2">{t('uploadQualityHint')}</p>
+                            </div>
+
+                            {/* Portfolio Preview */}
+                            {formData.portfolio.length > 0 && (
+                                <div className="mt-6">
+                                    <h3 className="text-sm font-medium text-gray-700 mb-3">Portfolio Images</h3>
+                                    <div className="grid grid-cols-3 gap-4">
+                                        {formData.portfolio.map((img, idx) => (
+                                            <div key={idx} className="relative bg-gray-100 h-32 rounded-lg flex items-center justify-center overflow-hidden border border-gray-200">
+                                                <img src={img} alt={`Portfolio ${idx + 1}`} className="w-full h-full object-cover" />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleRemovePortfolio(idx)}
+                                                    className="absolute top-2 right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-xs hover:bg-red-600"
+                                                >
+                                                    ×
+                                                </button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
                         {/* Form Actions */}

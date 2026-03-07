@@ -1,6 +1,11 @@
 const { Pool } = require('pg');
 
+// Use Supabase connection string if available, otherwise fallback to individual env vars
+const connectionString = process.env.DATABASE_URL;
+
 const pool = new Pool({
+    connectionString: connectionString,
+    // Fallback configuration for local development
     host: process.env.DB_HOST || 'localhost',
     port: process.env.DB_PORT || 5432,
     database: process.env.DB_NAME || 'job_seeking_app',
@@ -10,6 +15,7 @@ const pool = new Pool({
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 10000,
     statement_timeout: 30000,
+    ssl: connectionString ? { rejectUnauthorized: false } : false, // Enable SSL for Supabase
 });
 
 pool.on('error', (err) => {

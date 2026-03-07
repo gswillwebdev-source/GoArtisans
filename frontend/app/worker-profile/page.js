@@ -1,16 +1,17 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import apiClient from '@/lib/apiClient'
+import { useEffect, useState, useRef } from 'react'
+import { supabase } from '@/lib/supabase'
+import { useAuth } from '@/hooks/useAuth'
 import completionClient from '@/lib/completionClient'
 import RatingModal from '@/components/RatingModal'
-import RatingsDisplay from '@/components/RatingsDisplay'
 import WorkerRatingsDisplay from '@/components/WorkerRatingsDisplay'
 import { togoLocations, handworks } from '@/lib/togoData'
 import { useLanguage } from '@/context/LanguageContext'
 
 export default function WorkerProfilePage() {
     const { t } = useLanguage()
+    const { user, isLoading: authLoading } = useAuth({ requiredRole: 'worker' })
     const [profile, setProfile] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -40,6 +41,7 @@ export default function WorkerProfilePage() {
     const [savedJobs, setSavedJobs] = useState([])  // jobs worker saved for later
     const [finishedJobs, setFinishedJobs] = useState([])
     const [pendingJobs, setPendingJobs] = useState([])
+    const [ratings, setRatings] = useState([])  // ratings received from clients
     const [jobsLoading, setJobsLoading] = useState(false)
     const [emailVerificationCode, setEmailVerificationCode] = useState('')
     const [verifyingEmail, setVerifyingEmail] = useState(false)
@@ -51,35 +53,28 @@ export default function WorkerProfilePage() {
     const [showRatingModal, setShowRatingModal] = useState(false)
     const [ratingCompletionId, setRatingCompletionId] = useState(null)
     const [completionSuccess, setCompletionSuccess] = useState('')
+    const timeoutsRef = useRef([])
+
+    // Cleanup all timeouts on unmount
+    useEffect(() => {
+        return () => {
+            timeoutsRef.current.forEach(id => clearTimeout(id))
+        }
+    }, [])
 
     useEffect(() => {
-        const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
-        const userData = typeof window !== 'undefined' ? localStorage.getItem('user') : null
+        if (authLoading) return
 
-        if (!token) {
-            window.location.href = '/login'
+        if (!user) {
+            // useAuth will handle redirect
             return
         }
 
-        // Check if user is a worker, if not redirect to choose role
-        if (userData) {
-            const user = JSON.parse(userData)
-            if (!user.userType) {
-                window.location.href = '/choose-role'
-                return
-            } else if (user.userType !== 'worker') {
-                // User is a client, redirect to client profile
-                window.location.href = '/client-profile'
-                return
-            }
-        }
-
-        apiClient.setToken(token)
+        let isMounted = true
+        let timeoutId
+        let warningTimeoutId
 
         async function fetchProfile() {
-            let timeoutId;
-            let warningTimeoutId;
-
             try {
                 setLoading(true)
                 setError(null)
@@ -87,33 +82,107 @@ export default function WorkerProfilePage() {
 
                 // Show timeout warning after 20 seconds
                 warningTimeoutId = setTimeout(() => {
-                    setTimeoutWarning(true)
+                    if (isMounted) setTimeoutWarning(true)
                 }, 20000)
 
                 // Main timeout after 30 seconds
                 timeoutId = setTimeout(() => {
-                    setLoading(false)
-                    setError(t('profileTookTooLong'))
+                    if (isMounted) {
+                        setLoading(false)
+                        setError(t('profileTookTooLong'))
+                    }
                 }, 30000)
 
-                const res = await apiClient.getUserProfile()
+                // Fetch all data in parallel for fast loading
+                const results = await Promise.allSettled([
+                    // Profile information with gallery/portfolio
+                    supabase
+                        .from('users')
+                        .select('id,email,first_name,last_name,phone_number,job_title,location,bio,years_experience,portfolio,services,rating,user_type,completed_jobs')
+                        .eq('id', user.id)
+                        .single(),
+
+                    // Applications (jobs worker has applied to)
+                    supabase
+                        .from('applications')
+                        .select('id,job_id,status,proposed_price,message,created_at')
+                        .eq('worker_id', user.id)
+                        .order('created_at', { ascending: false }),
+
+                    // Ratings received from clients
+                    supabase
+                        .from('reviews')
+                        .select('id,rating,comment,created_at,rater_type,client_id')
+                        .eq('worker_id', user.id)
+                        .eq('rater_type', 'client')
+                        .order('created_at', { ascending: false }),
+
+                    // Active jobs available to apply to
+                    supabase
+                        .from('jobs')
+                        .select('id,title,description,budget,location,status,client_id,created_at')
+                        .eq('status', 'active')
+                        .limit(10)
+                ])
 
                 clearTimeout(timeoutId)
                 clearTimeout(warningTimeoutId)
 
-                let userData = res.data.user || res.data
-                // make sure the flag is consistent with userType so the UI sections render
-                if (!userData.isWorker && userData.userType === 'worker') {
-                    userData = { ...userData, isWorker: true }
+                // Check if still mounted before updating state
+                if (!isMounted) return
+
+                // Extract individual results from Promise.allSettled
+                let profileRes = { data: null, error: null }
+                let applicationsRes = { data: null, error: null }
+                let ratingsRes = { data: null, error: null }
+                let savedJobsRes = { data: null, error: null }
+
+                if (results[0].status === 'fulfilled') {
+                    profileRes = results[0].value
+                } else {
+                    profileRes.error = results[0].reason
                 }
+
+                if (results[1].status === 'fulfilled') {
+                    applicationsRes = results[1].value
+                } else {
+                    applicationsRes.error = results[1].reason
+                }
+
+                if (results[2].status === 'fulfilled') {
+                    ratingsRes = results[2].value
+                } else {
+                    ratingsRes.error = results[2].reason
+                }
+
+                if (results[3].status === 'fulfilled') {
+                    savedJobsRes = results[3].value
+                } else {
+                    savedJobsRes.error = results[3].reason
+                }
+
+                // Log any query errors for debugging
+                if (profileRes.error) console.error('Profile fetch error:', profileRes.error)
+                if (applicationsRes.error) console.error('Applications fetch error:', applicationsRes.error)
+                if (ratingsRes.error) console.error('Ratings fetch error:', ratingsRes.error)
+                if (savedJobsRes.error) console.error('Saved jobs fetch error:', savedJobsRes.error)
+
+                // Handle profile data (required)
+                if (profileRes.error) throw new Error(`Failed to fetch profile: ${profileRes.error.message}`)
+                let userData = profileRes.data
+                // Ensure user_type is set
+                if (!userData.user_type) {
+                    userData = { ...userData, user_type: 'worker' }
+                }
+
                 setProfile(userData)
 
-                // Set profile picture
-                if (userData.profilePicture) {
-                    setProfilePicturePreview(userData.profilePicture)
+                // Set profile picture from gallery
+                if (userData.portfolio && userData.portfolio.length > 0) {
+                    setProfilePicturePreview(userData.portfolio[0])
                 }
 
-                // Parse portfolio if it's a JSON string
+                // Parse portfolio/gallery if it's a JSON string
                 let portfolioData = userData.portfolio || []
                 if (typeof portfolioData === 'string') {
                     try {
@@ -135,76 +204,88 @@ export default function WorkerProfilePage() {
 
                 setFormData({
                     email: userData.email || '',
-                    firstName: userData.firstName || '',
-                    lastName: userData.lastName || '',
-                    phoneNumber: userData.phoneNumber || '',
-                    isWorker: userData.isWorker || userData.userType === 'worker' || false,
-                    jobTitle: userData.jobTitle || '',
+                    firstName: userData.first_name || '',
+                    lastName: userData.last_name || '',
+                    phoneNumber: userData.phone_number || '',
+                    isWorker: userData.user_type === 'worker' || false,
+                    jobTitle: userData.job_title || '',
                     location: userData.location || '',
                     bio: userData.bio || '',
-                    yearsExperience: userData.yearsExperience || 0,
+                    yearsExperience: userData.years_experience || 0,
                     services: servicesData,
                     portfolio: portfolioData,
-                    profilePicture: userData.profilePicture || null
+                    profilePicture: userData.portfolio && userData.portfolio.length > 0 ? userData.portfolio[0] : null
                 })
+
+                // Handle applications/jobs data (optional)
+                let apps = (applicationsRes.data && !applicationsRes.error) ? applicationsRes.data : []
+                // Normalize job_id to id for easier access in the UI
+                apps = apps.map(app => ({
+                    ...app,
+                    id: app.job_id
+                }))
+
+                // Categorize jobs by status
+                const applied = apps.filter(app => app.status === 'pending')
+                const accepted = apps.filter(app => app.status === 'accepted')
+                const finished = apps.filter(app => app.status === 'completed')
+
+                setAppliedJobs(applied)
+                setPendingJobs(accepted)
+                setFinishedJobs(finished)
+
+                // Handle ratings data (optional)
+                const ratingsData = (ratingsRes.data && !ratingsRes.error) ? ratingsRes.data : []
+                setRatings(ratingsData)
+
+                // Handle saved jobs (optional)
+                const savedJobs = (savedJobsRes.data && !savedJobsRes.error) ? savedJobsRes.data : []
+                setSavedJobs(savedJobs)
+
                 setTimeoutWarning(false)
 
-                // Fetch jobs related to this worker
-                try {
-                    const jobsRes = await apiClient.getMyApplications()
-                    let applications = jobsRes.data?.applications || []
-
-                    // Normalize job_id to id for easier access in the UI
-                    applications = applications.map(app => ({
-                        ...app,
-                        id: app.job_id  // alias job_id to id for button/key references
-                    }))
-
-                    // Categorize jobs by status
-                    const applied = applications.filter(app => app.status === 'pending')
-                    const accepted = applications.filter(app => app.status === 'accepted')
-                    const finished = applications.filter(app => app.completion_status === 'confirmed' || app.completion_status === 'completed_and_rated')
-
-                    setAppliedJobs(applied)
-                    setPendingJobs(accepted)
-                    setFinishedJobs(finished)
-
-                    // also load saved jobs (bookmarks) so the worker can revisit them
-                    try {
-                        const savedRes = await apiClient.getSavedJobs()
-                        setSavedJobs(savedRes.data.jobs || [])
-                    } catch (e) {
-                        console.error('Failed to fetch saved jobs:', e)
-                    }
-                } catch (jobErr) {
-                    console.error('Failed to fetch jobs:', jobErr)
-                }
             } catch (err) {
                 clearTimeout(timeoutId)
                 clearTimeout(warningTimeoutId)
 
-                console.error('Failed to fetch profile', err)
+                if (!isMounted) return
+
+                console.error('Failed to fetch profile data:', err)
+                console.error('Error details:', {
+                    message: err.message,
+                    code: err.code,
+                    status: err.status,
+                    details: err.details
+                })
 
                 let errorMessage = t('failedLoadProfileMsg')
                 if (err.code === 'ECONNABORTED') {
                     errorMessage = t('requestTimeoutMsg')
                 } else if (err.message === 'Network Error') {
                     errorMessage = t('networkErrorMsg')
-                } else if (err.response?.status === 401) {
+                } else if (err.status === 401) {
                     errorMessage = t('unauthorizedMsg')
-                } else if (err.response?.status === 500) {
+                } else if (err.status === 500) {
                     errorMessage = t('serverErrorMsg')
+                } else if (err.message) {
+                    errorMessage = err.message
                 }
 
                 setError(errorMessage)
                 setTimeoutWarning(false)
             } finally {
-                setLoading(false)
+                if (isMounted) setLoading(false)
             }
         }
 
         fetchProfile()
-    }, [])
+
+        return () => {
+            isMounted = false
+            clearTimeout(timeoutId)
+            clearTimeout(warningTimeoutId)
+        }
+    }, [authLoading, user, t])
 
     const handleInputChange = (e) => {
         const { name, value, type, checked } = e.target
@@ -286,31 +367,39 @@ export default function WorkerProfilePage() {
             const portfolioData = formData.portfolio.filter(p => p && typeof p === 'string')
 
             const updatePayload = {
-                firstName: formData.firstName,
-                lastName: formData.lastName,
-                phoneNumber: formData.phoneNumber,
-                isWorker: formData.isWorker,
-                jobTitle: formData.jobTitle,
+                first_name: formData.firstName,
+                last_name: formData.lastName,
+                phone_number: formData.phoneNumber,
+                user_type: formData.isWorker ? 'worker' : 'client',
+                job_title: formData.jobTitle,
                 location: formData.location,
                 bio: formData.bio,
-                yearsExperience: formData.yearsExperience,
+                years_experience: formData.yearsExperience,
                 services: formData.services,
-                portfolio: portfolioData,
-                profilePicture: formData.profilePicture
+                portfolio: portfolioData
             }
 
-            const res = await apiClient.updateUserProfile(updatePayload)
-            const updatedUser = res.data.user || res.data
+            const { data, error } = await supabase
+                .from('users')
+                .update(updatePayload)
+                .eq('id', user.id)
+                .select()
+                .single()
+
+            if (error) throw error
+
+            const updatedUser = data
             setProfile(updatedUser)
-            if (updatedUser.profilePicture) {
-                setProfilePicturePreview(updatedUser.profilePicture)
+            if (updatedUser.portfolio && updatedUser.portfolio.length > 0) {
+                setProfilePicturePreview(updatedUser.portfolio[0])
             }
             setIsEditing(false)
             setUpdateSuccess(true)
-            setTimeout(() => setUpdateSuccess(false), 3000)
+            const id = setTimeout(() => setUpdateSuccess(false), 3000)
+            timeoutsRef.current.push(id)
         } catch (err) {
             console.error('Failed to update profile', err)
-            setUpdateError(err.response?.data?.error || 'Failed to update profile')
+            setUpdateError(err.message || 'Failed to update profile')
         } finally {
             setUpdateLoading(false)
         }
@@ -321,32 +410,10 @@ export default function WorkerProfilePage() {
         setVerifyingEmail(true)
         setEmailVerificationError('')
         try {
-            const token = localStorage.getItem('token')
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/verify-email`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ verificationCode: emailVerificationCode })
-            })
-
-            if (!response.ok) {
-                const data = await response.json()
-                throw new Error(data.error || 'Verification failed')
-            }
-
-            // Update profile to show email verified
-            const userData = JSON.parse(localStorage.getItem('user') || '{}')
-            userData.emailVerified = true
-            localStorage.setItem('user', JSON.stringify(userData))
-
-            setProfile(prev => ({ ...prev, emailVerified: true }))
-            setEmailVerificationCode('')
-            setUpdateSuccess(true)
-            setTimeout(() => setUpdateSuccess(false), 3000)
+            // Email verification is handled by Supabase via email links
+            setEmailVerificationError('Email verification is handled automatically via the link sent to your email.')
         } catch (err) {
-            setEmailVerificationError(err.message || 'Failed to verify email')
+            setEmailVerificationError(err.message || 'Verification not available')
         } finally {
             setVerifyingEmail(false)
         }
@@ -356,23 +423,17 @@ export default function WorkerProfilePage() {
         setEmailResendLoading(true)
         setEmailVerificationError('')
         try {
-            const token = localStorage.getItem('token')
-            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/resend-verification-email`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                }
+            const { error } = await supabase.auth.resend({
+                type: 'signup',
+                email: user.email
             })
 
-            if (!response.ok) {
-                const data = await response.json()
-                throw new Error(data.error || 'Failed to resend code')
-            }
+            if (error) throw error
 
             setUpdateSuccess(true)
             setEmailResendCooldown(60)
-            setTimeout(() => setUpdateSuccess(false), 3000)
+            const id = setTimeout(() => setUpdateSuccess(false), 3000)
+            timeoutsRef.current.push(id)
         } catch (err) {
             setEmailVerificationError(err.message || 'Failed to resend verification code')
         } finally {
@@ -390,12 +451,14 @@ export default function WorkerProfilePage() {
             const status = await completionClient.getCompletionStatus(jobId)
             setCompletionStatus(prev => ({ ...prev, [jobId]: status }))
             setCompletionSuccess(t('completionSentSuccess'))
-            setTimeout(() => setCompletionSuccess(''), 4000)
+            const id = setTimeout(() => setCompletionSuccess(''), 4000)
+            timeoutsRef.current.push(id)
         } catch (err) {
             console.error('Failed to request completion:', err)
             const errorMessage = err.response?.data?.error || err.message || 'Failed to request completion'
             setUpdateError(errorMessage)
-            setTimeout(() => setUpdateError(null), 5000)
+            const id = setTimeout(() => setUpdateError(null), 5000)
+            timeoutsRef.current.push(id)
         } finally {
             setRequestingCompletion(prev => ({ ...prev, [jobId]: false }))
         }
@@ -505,7 +568,7 @@ export default function WorkerProfilePage() {
                     )}
 
                     {/* Email Verification Section */}
-                    {profile && !profile.emailVerified && (
+                    {profile && !profile.email_verified && (
                         <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6 rounded-r">
                             <div className="flex items-start">
                                 <div className="flex-1">
@@ -610,7 +673,7 @@ export default function WorkerProfilePage() {
                             </div>
                         </div>
 
-                        {profile.isWorker && (
+                        {profile.user_type === 'worker' && (
                             <>
                                 {/* Professional Profile */}
                                 <div className="bg-white shadow rounded-lg p-8">
