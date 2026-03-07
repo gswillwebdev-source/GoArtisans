@@ -118,7 +118,7 @@ export default function ClientProfilePage() {
                     // Jobs posted by this client
                     supabase
                         .from('jobs')
-                        .select('id,title,description,budget,location,status,job_type,salary,client_id,created_at,updated_at')
+                        .select('id,title,description,budget,location,status,category,client_id,created_at,updated_at')
                         .eq('client_id', user.id)
                         .order('created_at', { ascending: false }),
 

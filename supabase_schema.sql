@@ -114,6 +114,9 @@ CREATE POLICY "Public can view worker profiles" ON public.users
 CREATE POLICY "Anyone can view active jobs" ON public.jobs
     FOR SELECT USING (status = 'active');
 
+CREATE POLICY "Clients can view their own jobs" ON public.jobs
+    FOR SELECT USING (auth.uid() = client_id);
+
 CREATE POLICY "Clients can create jobs" ON public.jobs
     FOR INSERT WITH CHECK (auth.uid() = client_id);
 
