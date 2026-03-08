@@ -397,8 +397,8 @@ export default function ClientProfilePage() {
             title: job.title,
             description: job.description,
             location: job.location,
-            jobType: job.job_type,
-            salary: job.salary
+            jobType: job.category,
+            salary: job.budget
         })
         setEditingJobId(job.id)
         setShowJobModal(true)
@@ -874,11 +874,11 @@ export default function ClientProfilePage() {
                                             <div className="flex gap-6 mt-4 pt-4 border-t border-gray-200">
                                                 <div>
                                                     <span className="text-xs font-medium text-gray-600 uppercase">{t('type')}</span>
-                                                    <p className="text-sm text-gray-900 mt-1">{job.job_type || t('notSpecified')}</p>
+                                                    <p className="text-sm text-gray-900 mt-1">{job.category || t('notSpecified')}</p>
                                                 </div>
                                                 <div>
                                                     <span className="text-xs font-medium text-gray-600 uppercase">{t('hiringRate')}</span>
-                                                    <p className="text-sm text-gray-900 mt-1 font-semibold">{job.salary || t('negotiable')}</p>
+                                                    <p className="text-sm text-gray-900 mt-1 font-semibold">{job.budget || t('negotiable')}</p>
                                                 </div>
                                                 <div>
                                                     <span className="text-xs font-medium text-gray-600 uppercase">{t('posted')}</span>
@@ -1093,7 +1093,7 @@ export default function ClientProfilePage() {
                                                 <div className="flex gap-6 mt-4 pt-4 border-t border-gray-200">
                                                     <div>
                                                         <span className="text-xs font-medium text-gray-600 uppercase">{t('finalPrice')}</span>
-                                                        <p className="text-sm text-gray-900 mt-1 font-semibold">CFA {completion.final_price || job.salary}</p>
+                                                        <p className="text-sm text-gray-900 mt-1 font-semibold">CFA {completion.final_price || job.budget}</p>
                                                     </div>
                                                     <div>
                                                         <span className="text-xs font-medium text-gray-600 uppercase">{t('completedOn')}</span>

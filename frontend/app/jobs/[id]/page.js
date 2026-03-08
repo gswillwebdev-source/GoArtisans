@@ -45,9 +45,7 @@ export default function JobDetailsPage() {
                     title,
                     description,
                     budget,
-                    salary,
                     location,
-                    job_type,
                     category,
                     status,
                     created_at,
@@ -161,11 +159,11 @@ export default function JobDetailsPage() {
                         </div>
                         <div className="bg-gray-50 p-4 rounded">
                             <p className="text-sm text-gray-600">{t('jobType')}</p>
-                            <p className="font-semibold">{job.job_type}</p>
+                            <p className="font-semibold">{job.category || 'General'}</p>
                         </div>
                         <div className="bg-gray-50 p-4 rounded">
                             <p className="text-sm text-gray-600">{t('budget')}</p>
-                            <p className="font-semibold text-indigo-600">CFA {job.salary || t('competitive')}</p>
+                            <p className="font-semibold text-indigo-600">CFA {job.budget || t('competitive')}</p>
                         </div>
                         <div className="bg-gray-50 p-4 rounded">
                             <p className="text-sm text-gray-600">{t('posted')}</p>
