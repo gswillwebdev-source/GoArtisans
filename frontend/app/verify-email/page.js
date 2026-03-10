@@ -54,9 +54,17 @@ export default function VerifyEmailPage() {
         setResendSuccess(false)
 
         try {
+            const { data: { user } } = await supabase.auth.getUser()
+
+            if (!user?.email) {
+                setResendError('Could not find your email address')
+                setResendLoading(false)
+                return
+            }
+
             const { error } = await supabase.auth.resend({
                 type: 'signup',
-                email: (await supabase.auth.getUser()).data.user?.email
+                email: user.email
             })
 
             if (error) {

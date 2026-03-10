@@ -33,7 +33,7 @@ const completionClient = {
                 job_id: jobId,
                 worker_id: user.id,
                 client_id: job.client_id,
-                status: 'completed'
+                status: 'pending'
             }])
             .select()
             .single();

@@ -64,6 +64,7 @@ export default function ClientProfilePage() {
     const [ratingCompletionId, setRatingCompletionId] = useState(null)
     const [showDeclineModal, setShowDeclineModal] = useState(false)
     const [declineCompletionId, setDeclineCompletionId] = useState(null)
+    const [updatingAppId, setUpdatingAppId] = useState(null)
     const timeoutsRef = useRef([])
 
     // Cleanup all timeouts on unmount
@@ -122,6 +123,13 @@ export default function ClientProfilePage() {
                         .eq('client_id', user.id)
                         .order('created_at', { ascending: false }),
 
+                    // Completions for client's jobs
+                    supabase
+                        .from('completions')
+                        .select('id,job_id,status,worker_id,confirmed_at,declined_at,decline_reason,created_at')
+                        .eq('client_id', user.id)
+                        .order('created_at', { ascending: false }),
+
                     // Ratings received from workers
                     supabase
                         .from('reviews')
@@ -147,6 +155,7 @@ export default function ClientProfilePage() {
                 // Extract individual results from Promise.allSettled
                 let profileRes = { data: null, error: null }
                 let jobsRes = { data: null, error: null }
+                let completionsRes = { data: null, error: null }
                 let ratingsRes = { data: null, error: null }
                 let applicantsRes = { data: null, error: null }
 
@@ -163,20 +172,27 @@ export default function ClientProfilePage() {
                 }
 
                 if (results[2].status === 'fulfilled') {
-                    ratingsRes = results[2].value
+                    completionsRes = results[2].value
                 } else {
-                    ratingsRes.error = results[2].reason
+                    completionsRes.error = results[2].reason
                 }
 
                 if (results[3].status === 'fulfilled') {
-                    applicantsRes = results[3].value
+                    ratingsRes = results[3].value
                 } else {
-                    applicantsRes.error = results[3].reason
+                    ratingsRes.error = results[3].reason
+                }
+
+                if (results[4].status === 'fulfilled') {
+                    applicantsRes = results[4].value
+                } else {
+                    applicantsRes.error = results[4].reason
                 }
 
                 // Log any query errors for debugging
                 if (profileRes.error) console.error('Profile fetch error:', profileRes.error)
                 if (jobsRes.error) console.error('Jobs fetch error:', jobsRes.error)
+                if (completionsRes.error) console.error('Completions fetch error:', completionsRes.error)
                 if (ratingsRes.error) console.error('Ratings fetch error:', ratingsRes.error)
                 if (applicantsRes.error) console.error('Applicants fetch error:', applicantsRes.error)
 
@@ -210,9 +226,17 @@ export default function ClientProfilePage() {
                     portfolio: portfolioData
                 })
 
-                // Handle jobs data (optional)
+                // Handle jobs data (optional) - match with completions
                 const jobsData = (jobsRes.data && !jobsRes.error) ? jobsRes.data : []
-                setJobs(jobsData)
+                const completionsData = (completionsRes.data && !completionsRes.error) ? completionsRes.data : []
+
+                // Attach completions to jobs
+                const jobsWithCompletions = jobsData.map(job => ({
+                    ...job,
+                    completions: completionsData.filter(c => c.job_id === job.id)
+                }))
+
+                setJobs(jobsWithCompletions)
 
                 // Handle ratings data (optional)
                 const ratingsData = (ratingsRes.data && !ratingsRes.error) ? ratingsRes.data : []
@@ -432,6 +456,8 @@ export default function ClientProfilePage() {
 
     const handleUpdateApplicationStatus = async (appId, newStatus) => {
         try {
+            setUpdatingAppId(appId)
+
             const { error } = await supabase
                 .from('applications')
                 .update({ status: newStatus })
@@ -449,7 +475,9 @@ export default function ClientProfilePage() {
             setJobApplicants(updatedApplicants)
         } catch (err) {
             console.error('Failed to update application status', err)
-            alert('Failed to update application status')
+            alert(`Failed to ${newStatus} application: ${err.message}`)
+        } finally {
+            setUpdatingAppId(null)
         }
     }
 
@@ -538,13 +566,14 @@ export default function ClientProfilePage() {
     const handleConfirmCompletion = async (completionId) => {
         try {
             await completionClient.confirmCompletion(completionId)
-            // Find the job_id for this completion
-            const jobId = Object.keys(completionStatus).find(key => completionStatus[key].id === completionId)
-            if (jobId) {
-                setCompletionStatus(prev => ({
-                    ...prev,
-                    [jobId]: { ...prev[jobId], status: 'confirmed' }
-                }))
+            // Find the job by searching through jobs with this completion
+            const job = jobs.find(j => j.completions && j.completions.some(c => c.id === completionId))
+            if (job) {
+                // Update the jobs state with the new completion status
+                const updatedCompletions = job.completions.map(c =>
+                    c.id === completionId ? { ...c, status: 'confirmed' } : c
+                )
+                setJobs(prev => prev.map(j => j.id === job.id ? { ...j, completions: updatedCompletions } : j))
             }
             setRatingCompletionId(completionId)
             setShowRatingModal(true)
@@ -564,22 +593,15 @@ export default function ClientProfilePage() {
     }
 
     const handleDeclineSubmit = async () => {
-        // The modal will handle the actual submission
-        // Just refresh the completion status after
-        if (declineCompletionId) {
+        // Find the job by searching through jobs with this completion
+        const job = jobs.find(j => j.completions && j.completions.some(c => c.id === declineCompletionId))
+        if (job) {
             try {
-                // Find the job_id for this completion
-                const jobId = Object.keys(completionStatus).find(key => completionStatus[key].id === declineCompletionId)
-                if (jobId) {
-                    const response = await completionClient.getCompletionStatus(jobId)
-                    const status = response.data || response
-                    if (status && status.id) {
-                        setCompletionStatus(prev => ({
-                            ...prev,
-                            [jobId]: status
-                        }))
-                    }
-                }
+                // Update the jobs state with the new completion status
+                const updatedCompletions = job.completions.map(c =>
+                    c.id === declineCompletionId ? { ...c, status: 'declined' } : c
+                )
+                setJobs(prev => prev.map(j => j.id === job.id ? { ...j, completions: updatedCompletions } : j))
             } catch (err) {
                 console.error('Failed to refresh completion status:', err)
             }
@@ -903,29 +925,15 @@ export default function ClientProfilePage() {
                         <div className="bg-white shadow rounded-lg p-8 mb-8">
                             <h2 className="text-xl font-semibold mb-6">{t('activeProjectsCompletion')}</h2>
 
-                            {jobs.filter(job => job.worker_id).length === 0 ? (
+                            {jobs.filter(job => job.completions && job.completions.length > 0).length === 0 ? (
                                 <div className="text-center py-12">
                                     <div className="text-4xl mb-4">🔄</div>
                                     <p className="text-gray-600">{t('noActiveProjectsCompletion')}</p>
                                 </div>
                             ) : (
                                 <div className="space-y-4">
-                                    {jobs.filter(job => job.worker_id).map(job => {
-                                        const completion = completionStatus[job.id]
-
-                                        if (!completion) {
-                                            return (
-                                                <div key={job.id} className="border border-gray-200 rounded-lg p-4">
-                                                    <div className="flex justify-between items-start">
-                                                        <div>
-                                                            <h3 className="font-semibold text-gray-900">{job.title}</h3>
-                                                            <p className="text-sm text-gray-600 mt-1">{t('waitingForWorkerCompletion')}</p>
-                                                        </div>
-                                                        <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded-full text-xs font-medium">{t('inProgress')}</span>
-                                                    </div>
-                                                </div>
-                                            )
-                                        }
+                                    {jobs.filter(job => job.completions && job.completions.length > 0).map(job => {
+                                        const completion = job.completions[0]
 
                                         return (
                                             <div key={job.id} className="border-2 border-yellow-300 rounded-lg p-4 bg-yellow-50">
@@ -933,11 +941,17 @@ export default function ClientProfilePage() {
                                                     <div>
                                                         <h3 className="font-semibold text-gray-900">{job.title}</h3>
                                                         <p className="text-sm text-gray-600 mt-1">
-                                                            {completion.status === 'pending' ? `⏳ ${t('workerCompletedAwaiting')}` : ''}
+                                                            {completion.status === 'pending' ? `⏳ ${t('workerCompletedAwaiting')}` : completion.status === 'confirmed' ? `✓ ${t('confirmed')}` : `✕ ${t('declined')}`}
                                                         </p>
                                                     </div>
                                                     {completion.status === 'pending' && (
                                                         <span className="px-3 py-1 bg-yellow-200 text-yellow-900 rounded-full text-xs font-medium animate-pulse">{t('needsReview')}</span>
+                                                    )}
+                                                    {completion.status === 'confirmed' && (
+                                                        <span className="px-3 py-1 bg-green-200 text-green-900 rounded-full text-xs font-medium">{t('confirmed')}</span>
+                                                    )}
+                                                    {completion.status === 'declined' && (
+                                                        <span className="px-3 py-1 bg-red-200 text-red-900 rounded-full text-xs font-medium">{t('declined')}</span>
                                                     )}
                                                 </div>
 
@@ -1020,7 +1034,7 @@ export default function ClientProfilePage() {
                                                                     </div>
                                                                     <div className="flex flex-col items-end gap-2">
                                                                         <span className={`px-3 py-1 rounded-full text-xs font-medium ${applicant.status === 'accepted' ? 'bg-green-100 text-green-800' :
-                                                                            applicant.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                                                                            applicant.status === 'declined' ? 'bg-red-100 text-red-800' :
                                                                                 applicant.status === 'completed' ? 'bg-blue-100 text-blue-800' :
                                                                                     'bg-yellow-100 text-yellow-800'
                                                                             }`}>
@@ -1028,7 +1042,7 @@ export default function ClientProfilePage() {
                                                                         </span>
                                                                         <div className="flex gap-1">
                                                                             <Link
-                                                                                href={`/workers/${applicant.user_id}`}
+                                                                                href={`/workers/${applicant.worker_id}`}
                                                                                 className="bg-blue-50 text-blue-600 px-2 py-1 rounded text-xs hover:bg-blue-100 transition"
                                                                             >
                                                                                 {t('viewProfile')}
@@ -1048,15 +1062,17 @@ export default function ClientProfilePage() {
                                                                             <div className="flex gap-1">
                                                                                 <button
                                                                                     onClick={() => handleUpdateApplicationStatus(applicant.id, 'accepted')}
-                                                                                    className="bg-green-50 text-green-600 px-2 py-1 rounded text-xs hover:bg-green-100 transition font-medium"
+                                                                                    disabled={updatingAppId === applicant.id}
+                                                                                    className="bg-green-50 text-green-600 px-2 py-1 rounded text-xs hover:bg-green-100 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                                                                                 >
-                                                                                    ✓ {t('acceptApplicant')}
+                                                                                    {updatingAppId === applicant.id ? '⏳' : '✓'} {t('acceptApplicant')}
                                                                                 </button>
                                                                                 <button
-                                                                                    onClick={() => handleUpdateApplicationStatus(applicant.id, 'rejected')}
-                                                                                    className="bg-red-50 text-red-600 px-2 py-1 rounded text-xs hover:bg-red-100 transition font-medium"
+                                                                                    onClick={() => handleUpdateApplicationStatus(applicant.id, 'declined')}
+                                                                                    disabled={updatingAppId === applicant.id}
+                                                                                    className="bg-red-50 text-red-600 px-2 py-1 rounded text-xs hover:bg-red-100 transition font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                                                                                 >
-                                                                                    ✕ {t('rejectApplicant')}
+                                                                                    {updatingAppId === applicant.id ? '⏳' : '✕'} {t('rejectApplicant')}
                                                                                 </button>
                                                                             </div>
                                                                         )}

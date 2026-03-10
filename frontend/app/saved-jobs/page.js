@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
-import apiClient from '@/lib/apiClient'
+import { supabase } from '@/lib/supabase'
 import JobCard from '@/components/JobCard'
 
 export default function SavedJobsPage() {
@@ -14,20 +14,24 @@ export default function SavedJobsPage() {
     useEffect(() => {
         const fetchSavedJobs = async () => {
             try {
-                const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
-                if (!token) {
+                // Check if user is authenticated
+                const { data: { user }, error: authError } = await supabase.auth.getUser()
+
+                if (authError || !user) {
                     setIsLoggedIn(false)
                     setLoading(false)
                     return
                 }
 
                 setIsLoggedIn(true)
-                apiClient.setToken(token)
-                const response = await apiClient.getSavedJobs()
-                setSavedJobs(response.data.jobs || [])
+
+                // Note: Saved jobs feature is not yet implemented in the database
+                // For now, showing an empty list
+                // TODO: Implement saved_jobs table in Supabase schema
+                setSavedJobs([])
             } catch (err) {
                 console.error('Error fetching saved jobs:', err)
-                setError(err.response?.data?.error || 'Failed to load saved jobs')
+                setError('Failed to load saved jobs')
             } finally {
                 setLoading(false)
             }
@@ -35,10 +39,6 @@ export default function SavedJobsPage() {
 
         fetchSavedJobs()
     }, [])
-
-    const handleUnsave = async (jobId) => {
-        setSavedJobs(savedJobs.filter(job => job.id !== jobId))
-    }
 
     if (!isLoggedIn) {
         return (
@@ -78,7 +78,6 @@ export default function SavedJobsPage() {
                                 key={job.id}
                                 job={job}
                                 isSaved={true}
-                                onSaveToggle={handleUnsave}
                             />
                         ))}
                     </div>

@@ -1,103 +1,213 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useRouter, useParams } from 'next/navigation'
-import apiClient from '@/lib/apiClient'
+import { useParams } from 'next/navigation'
+import Link from 'next/link'
+import { supabase } from '@/lib/supabase'
 import WorkerRatingsDisplay from '@/components/WorkerRatingsDisplay'
 
 export default function WorkerProfilePage() {
     const params = useParams()
-    const id = params?.id
+    const workerId = params?.id
     const [worker, setWorker] = useState(null)
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
 
     useEffect(() => {
-        if (!id) return
+        if (!workerId) return
+
         async function fetchWorker() {
             try {
                 setLoading(true)
-                const res = await apiClient.getWorkerProfile(id)
-                setWorker(res.data.worker || res.data)
+
+                const { data: workerData, error } = await supabase
+                    .from('users')
+                    .select(`
+                        id,
+                        first_name,
+                        last_name,
+                        email,
+                        phone_number,
+                        user_type,
+                        job_title,
+                        location,
+                        bio,
+                        years_experience,
+                        services,
+                        portfolio,
+                        profile_picture,
+                        completed_jobs,
+                        rating,
+                        is_active,
+                        created_at
+                    `)
+                    .eq('id', workerId)
+                    .eq('user_type', 'worker')
+                    .single()
+
+                if (error) {
+                    throw error
+                }
+
+                setWorker(workerData)
             } catch (err) {
-                console.error('Failed to load worker profile', err)
+                console.error('Failed to fetch worker:', err)
                 setError('Failed to load worker profile')
             } finally {
                 setLoading(false)
             }
         }
+
         fetchWorker()
-    }, [id])
+    }, [workerId])
 
-    if (loading) return <div className="min-h-screen flex items-center justify-center">Loading profile...</div>
-    if (error) return <div className="min-h-screen flex items-center justify-center">{error}</div>
+    if (loading) {
+        return (
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+                <div className="text-center">Loading...</div>
+            </div>
+        )
+    }
 
-    if (!worker) return <div className="min-h-screen flex items-center justify-center">Worker not found</div>
+    if (error || !worker) {
+        return (
+            <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+                <div className="text-center">
+                    <h2 className="text-2xl font-bold text-gray-900 mb-4">
+                        {error || 'Worker not found'}
+                    </h2>
+                    <Link href="/browse-workers" className="text-indigo-600 hover:text-indigo-700">
+                        Back to workers
+                    </Link>
+                </div>
+            </div>
+        )
+    }
 
     return (
-        <div className="min-h-screen bg-gray-50 py-12">
-            <div className="max-w-4xl mx-auto bg-white shadow rounded-lg p-8">
-                {/* Top Section */}
-                <div className="flex items-center gap-6">
-                    <img src="/default-avatar.png" alt="profile" className="w-28 h-28 rounded-full object-cover border" />
-                    <div>
-                        <h1 className="text-2xl font-bold">{worker.firstName} {worker.lastName}</h1>
-                        <p className="text-sm text-gray-600">{worker.jobTitle || 'Service Provider'}</p>
-                        <p className="text-sm text-gray-600">{worker.location || 'Location not specified'}</p>
-                        <div className="mt-2 text-yellow-500">⭐ {worker.rating || 0}/5</div>
-                    </div>
-                </div>
+        <div className="min-h-screen bg-gray-50 py-8">
+            <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+                <Link href="/browse-workers" className="text-indigo-600 hover:text-indigo-700 mb-6 inline-block">
+                    ← Back to workers
+                </Link>
 
-                {/* About / Bio */}
-                <div className="mt-6">
-                    <h2 className="text-lg font-semibold">About</h2>
-                    <p className="text-sm text-gray-700 mt-2">{worker.bio || 'No description provided.'}</p>
-                    <div className="mt-3 text-sm text-gray-600">{worker.yearsExperience} years experience · {worker.completedJobs} jobs completed</div>
-                </div>
-
-                {/* Skills / Services */}
-                <div className="mt-6">
-                    <h2 className="text-lg font-semibold">Services</h2>
-                    <div className="mt-2 flex flex-wrap gap-2">
-                        {(worker.services || []).length === 0 ? (
-                            <span className="text-sm text-gray-500">No services listed.</span>
-                        ) : (
-                            (worker.services || []).map((s, idx) => (
-                                <span key={idx} className="px-3 py-1 bg-indigo-100 text-indigo-800 rounded-full text-sm">{s}</span>
-                            ))
-                        )}
-                    </div>
-                </div>
-
-                {/* Reviews */}
-                <div className="mt-6">
-                    <h2 className="text-lg font-semibold">Reviews ({(worker.reviews || []).length})</h2>
-                    <div className="mt-3 space-y-4">
-                        {(worker.reviews || []).length === 0 && <div className="text-sm text-gray-500">No reviews yet.</div>}
-                        {(worker.reviews || []).map((r) => (
-                            <div key={r.id} className="border p-3 rounded-lg">
-                                <div className="flex justify-between items-center">
-                                    <div className="text-sm font-medium">{r.client_first_name ? `${r.client_first_name} ${r.client_last_name || ''}` : 'Client'}</div>
-                                    <div className="text-yellow-500">{'⭐'.repeat(Math.max(1, r.rating))} <span className="text-gray-600 text-sm">{r.rating}/5</span></div>
+                <div className="bg-white rounded-lg shadow-lg p-8">
+                    {/* Profile Header */}
+                    <div className="flex flex-col md:flex-row gap-8 mb-8">
+                        {/* Profile Picture */}
+                        <div>
+                            {worker.profile_picture ? (
+                                <div className="w-48 h-48 rounded-lg overflow-hidden bg-gray-200">
+                                    <img
+                                        src={worker.profile_picture}
+                                        alt={`${worker.first_name} ${worker.last_name}`}
+                                        className="w-full h-full object-cover"
+                                    />
                                 </div>
-                                <div className="text-sm text-gray-700 mt-2">{r.comment}</div>
-                                <div className="text-xs text-gray-400 mt-2">{new Date(r.created_at).toLocaleDateString()}</div>
+                            ) : (
+                                <div className="w-48 h-48 rounded-lg bg-indigo-200 flex items-center justify-center text-indigo-600 font-bold text-6xl">
+                                    {worker.first_name?.charAt(0)}{worker.last_name?.charAt(0)}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* Worker Info */}
+                        <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                                <h1 className="text-4xl font-bold">
+                                    {worker.first_name} {worker.last_name}
+                                </h1>
+                                <span className={`inline-block px-3 py-1 rounded-full text-sm font-semibold ${
+                                    worker.is_active
+                                        ? 'bg-green-100 text-green-800'
+                                        : 'bg-gray-100 text-gray-800'
+                                }`}>
+                                    {worker.is_active ? '✓ Available' : '✗ Busy'}
+                                </span>
                             </div>
-                        ))}
+
+                            {worker.job_title && (
+                                <p className="text-xl text-indigo-600 font-semibold mb-1">
+                                    {worker.job_title}
+                                </p>
+                            )}
+
+                            {worker.location && (
+                                <p className="text-gray-600 mb-4">
+                                    📍 {worker.location}
+                                </p>
+                            )}
+
+                            <div className="flex gap-4 text-lg">
+                                <div>
+                                    <span className="font-semibold text-gray-900">
+                                        ⭐ {(worker.rating || 0).toFixed(1)}/5
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="font-semibold text-gray-900">
+                                        ✓ {worker.completed_jobs || 0} jobs completed
+                                    </span>
+                                </div>
+                                <div>
+                                    <span className="font-semibold text-gray-900">
+                                        📅 {worker.years_experience || 0} years experience
+                                    </span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                </div>
 
-                {/* Ratings Section */}
-                <div className="mt-6">
-                    <h2 className="text-lg font-semibold mb-3">Client Ratings & Feedback</h2>
-                    <WorkerRatingsDisplay workerId={worker.id} />
-                </div>
+                    {/* Bio */}
+                    {worker.bio && (
+                        <div className="border-t pt-6 mb-6">
+                            <h2 className="text-2xl font-bold mb-3">About</h2>
+                            <p className="text-gray-700 text-lg">{worker.bio}</p>
+                        </div>
+                    )}
 
-                {/* Contact / Actions */}
-                <div className="mt-6 flex gap-3">
-                    <a href={`tel:${worker.phoneNumber || ''}`} className="flex-1 text-center bg-green-600 text-white px-4 py-2 rounded-lg">Call</a>
-                    <button className="flex-1 text-center bg-gray-200 text-gray-800 px-4 py-2 rounded-lg">Message</button>
-                    <button className="flex-1 text-center bg-indigo-600 text-white px-4 py-2 rounded-lg">Request Service</button>
+                    {/* Services */}
+                    {worker.services && worker.services.length > 0 && (
+                        <div className="border-t pt-6 mb-6">
+                            <h2 className="text-2xl font-bold mb-3">Services</h2>
+                            <div className="flex flex-wrap gap-2">
+                                {worker.services.map((service, idx) => (
+                                    <span
+                                        key={idx}
+                                        className="px-4 py-2 bg-indigo-100 text-indigo-800 rounded-full font-medium"
+                                    >
+                                        {service}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Portfolio */}
+                    {worker.portfolio && worker.portfolio.length > 0 && (
+                        <div className="border-t pt-6 mb-6">
+                            <h2 className="text-2xl font-bold mb-3">Portfolio</h2>
+                            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                                {worker.portfolio.map((item, idx) => (
+                                    <a
+                                        key={idx}
+                                        href={item}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-indigo-600 hover:underline truncate"
+                                    >
+                                        Portfolio Item {idx + 1}
+                                    </a>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Ratings */}
+                    <div className="border-t pt-6">
+                        <h2 className="text-2xl font-bold mb-4">Reviews</h2>
+                        <WorkerRatingsDisplay workerId={worker.id} />
+                    </div>
                 </div>
             </div>
         </div>

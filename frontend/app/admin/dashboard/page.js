@@ -8,9 +8,15 @@ import { supabase } from '@/lib/supabase'
 export default function AdminDashboardPage() {
     const router = useRouter()
     const [stats, setStats] = useState(null)
+    const [activeTab, setActiveTab] = useState('overview')
+    const [users, setUsers] = useState([])
+    const [jobs, setJobs] = useState([])
+    const [applications, setApplications] = useState([])
+    const [completions, setCompletions] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
     const [isChecking, setIsChecking] = useState(true)
+    const [searchQuery, setSearchQuery] = useState('')
 
     useEffect(() => {
         // Check if admin is logged in
@@ -38,22 +44,27 @@ export default function AdminDashboardPage() {
 
     useEffect(() => {
         if (!isChecking) {
-            fetchStats()
+            fetchAllData()
         }
     }, [isChecking])
 
-    const fetchStats = async () => {
+    const fetchAllData = async () => {
         try {
             setLoading(true)
             setError('')
 
-            // Get stats from Supabase
-            const [usersResult, jobsResult, applicationsResult, reviewsResult] = await Promise.all([
-                supabase.from('users').select('id, user_type', { count: 'exact' }),
-                supabase.from('jobs').select('id, status', { count: 'exact' }),
-                supabase.from('applications').select('id, status', { count: 'exact' }),
-                supabase.from('reviews').select('id, rating', { count: 'exact' })
+            const [usersResult, jobsResult, applicationsResult, reviewsResult, completionsResult] = await Promise.all([
+                supabase.from('users').select('*', { count: 'exact' }).order('created_at', { ascending: false }),
+                supabase.from('jobs').select('*', { count: 'exact' }).order('created_at', { ascending: false }),
+                supabase.from('applications').select('*', { count: 'exact' }).order('created_at', { ascending: false }),
+                supabase.from('reviews').select('*', { count: 'exact' }),
+                supabase.from('completions').select('*', { count: 'exact' }).order('created_at', { ascending: false })
             ])
+
+            setUsers(usersResult.data || [])
+            setJobs(jobsResult.data || [])
+            setApplications(applicationsResult.data || [])
+            setCompletions(completionsResult.data || [])
 
             const stats = {
                 totalUsers: usersResult.count || 0,
@@ -61,8 +72,12 @@ export default function AdminDashboardPage() {
                 totalWorkers: usersResult.data?.filter(u => u.user_type === 'worker').length || 0,
                 totalJobs: jobsResult.count || 0,
                 activeJobs: jobsResult.data?.filter(j => j.status === 'active').length || 0,
+                completedJobs: jobsResult.data?.filter(j => j.status === 'completed').length || 0,
                 totalApplications: applicationsResult.count || 0,
                 pendingApplications: applicationsResult.data?.filter(a => a.status === 'pending').length || 0,
+                acceptedApplications: applicationsResult.data?.filter(a => a.status === 'accepted').length || 0,
+                totalCompletions: completionsResult.count || 0,
+                confirmedCompletions: completionsResult.data?.filter(c => c.status === 'confirmed').length || 0,
                 totalReviews: reviewsResult.count || 0,
                 averageRating: reviewsResult.data?.length > 0
                     ? (reviewsResult.data.reduce((sum, r) => sum + r.rating, 0) / reviewsResult.data.length).toFixed(1)
@@ -71,16 +86,47 @@ export default function AdminDashboardPage() {
 
             setStats(stats)
         } catch (err) {
-            setError('Failed to load statistics')
-            console.error('Error fetching stats:', err)
+            setError('Failed to load data')
+            console.error('Error fetching data:', err)
         } finally {
             setLoading(false)
         }
     }
 
+    const handleDeleteUser = async (userId) => {
+        if (!window.confirm('Are you sure you want to delete this user? This cannot be undone.')) return
+
+        try {
+            const { error } = await supabase
+                .from('users')
+                .delete()
+                .eq('id', userId)
+
+            if (error) throw error
+            setUsers(users.filter(u => u.id !== userId))
+        } catch (err) {
+            alert('Failed to delete user: ' + err.message)
+        }
+    }
+
+    const handleDeleteJob = async (jobId) => {
+        if (!window.confirm('Are you sure you want to delete this job?')) return
+
+        try {
+            const { error } = await supabase
+                .from('jobs')
+                .delete()
+                .eq('id', jobId)
+
+            if (error) throw error
+            setJobs(jobs.filter(j => j.id !== jobId))
+        } catch (err) {
+            alert('Failed to delete job: ' + err.message)
+        }
+    }
+
     const handleLogout = async () => {
         await supabase.auth.signOut()
-        localStorage.removeItem('adminUser')
         router.push('/admin/login')
     }
 
@@ -88,28 +134,30 @@ export default function AdminDashboardPage() {
         return <div className="min-h-screen flex items-center justify-center">Loading...</div>
     }
 
+    const filteredUsers = users.filter(u =>
+        u.first_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        u.last_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        u.email?.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+
+    const filteredJobs = jobs.filter(j =>
+        j.title?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        j.description?.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+
     return (
         <div className="min-h-screen bg-gray-50">
             {/* Navbar */}
-            <nav className="bg-red-600 text-white shadow-lg">
+            <nav className="bg-indigo-600 text-white shadow-lg">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
                     <div className="flex justify-between items-center">
                         <Link href="/admin/dashboard" className="text-2xl font-bold">
-                            GoArtisans Admin
+                            JobSeek Admin
                         </Link>
-                        <div className="flex gap-4 items-center">
-                            <Link href="/admin/users" className="hover:bg-red-700 px-3 py-2 rounded">
-                                Users
-                            </Link>
-                            <Link href="/admin/reviews" className="hover:bg-red-700 px-3 py-2 rounded">
-                                Reviews
-                            </Link>
-                            <Link href="/admin/settings" className="hover:bg-red-700 px-3 py-2 rounded">
-                                Settings
-                            </Link>
+                        <div className="flex gap-2 items-center">
                             <button
                                 onClick={handleLogout}
-                                className="bg-red-700 hover:bg-red-800 px-3 py-2 rounded font-semibold"
+                                className="bg-indigo-700 hover:bg-indigo-800 px-4 py-2 rounded font-semibold transition"
                             >
                                 Logout
                             </button>
@@ -118,15 +166,39 @@ export default function AdminDashboardPage() {
                 </div>
             </nav>
 
-            {/* Main Content */}
-            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-                <h1 className="text-4xl font-bold text-gray-900 mb-8">Dashboard</h1>
+            {/* Tab Navigation */}
+            <div className="bg-white border-b border-gray-200 sticky top-0 z-10">
+                <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                    <div className="flex gap-8 overflow-x-auto">
+                        {[
+                            { id: 'overview', label: '📊 Overview' },
+                            { id: 'users', label: '👥 Users' },
+                            { id: 'jobs', label: '💼 Jobs' },
+                            { id: 'applications', label: '📋 Applications' },
+                            { id: 'completions', label: '✅ Completions' }
+                        ].map(tab => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                className={`px-4 py-4 font-medium transition border-b-2 whitespace-nowrap ${activeTab === tab.id
+                                        ? 'border-indigo-600 text-indigo-600'
+                                        : 'border-transparent text-gray-600 hover:text-gray-900'
+                                    }`}
+                            >
+                                {tab.label}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+            </div>
 
+            {/* Main Content */}
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
                 {error && (
                     <div className="bg-red-50 text-red-600 p-4 rounded-lg mb-6">
                         {error}
                         <button
-                            onClick={fetchStats}
+                            onClick={fetchAllData}
                             className="ml-4 bg-red-600 text-white px-3 py-1 rounded hover:bg-red-700"
                         >
                             Retry
@@ -137,123 +209,280 @@ export default function AdminDashboardPage() {
                 {loading ? (
                     <div className="text-center py-12">
                         <div className="inline-block">
-                            <div className="animate-spin h-12 w-12 border-b-2 border-red-600 rounded-full"></div>
+                            <div className="animate-spin h-12 w-12 border-b-2 border-indigo-600 rounded-full"></div>
                         </div>
-                        <p className="text-gray-600 mt-4">Loading statistics...</p>
+                        <p className="text-gray-600 mt-4">Loading data...</p>
                     </div>
-                ) : stats ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                        {/* Total Workers Card */}
-                        <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-blue-600">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-gray-500 text-sm font-medium">Total Workers</p>
-                                    <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalWorkers}</p>
-                                </div>
-                                <div className="bg-blue-100 rounded-full p-3">
-                                    <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 12H9m6 0H9m6 0a4 4 0 11-8 0" />
-                                    </svg>
+                ) : (
+                    <>
+                        {/* Overview Tab */}
+                        {activeTab === 'overview' && stats && (
+                            <div>
+                                <h1 className="text-3xl font-bold text-gray-900 mb-8">Dashboard Overview</h1>
+
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                    {/* Stats Cards */}
+                                    <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-blue-600">
+                                        <p className="text-gray-500 text-sm font-medium">Total Users</p>
+                                        <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalUsers}</p>
+                                        <p className="text-xs text-gray-500 mt-2">Workers: {stats.totalWorkers} | Clients: {stats.totalClients}</p>
+                                    </div>
+
+                                    <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-green-600">
+                                        <p className="text-gray-500 text-sm font-medium">Total Jobs</p>
+                                        <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalJobs}</p>
+                                        <p className="text-xs text-gray-500 mt-2">Active: {stats.activeJobs} | Completed: {stats.completedJobs}</p>
+                                    </div>
+
+                                    <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-purple-600">
+                                        <p className="text-gray-500 text-sm font-medium">Applications</p>
+                                        <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalApplications}</p>
+                                        <p className="text-xs text-gray-500 mt-2">Pending: {stats.pendingApplications} | Accepted: {stats.acceptedApplications}</p>
+                                    </div>
+
+                                    <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-yellow-600">
+                                        <p className="text-gray-500 text-sm font-medium">Completions</p>
+                                        <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalCompletions}</p>
+                                        <p className="text-xs text-gray-500 mt-2">Confirmed: {stats.confirmedCompletions}</p>
+                                    </div>
+
+                                    <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-orange-600">
+                                        <p className="text-gray-500 text-sm font-medium">Average Rating</p>
+                                        <p className="text-3xl font-bold text-gray-900 mt-2">⭐ {stats.averageRating}/5</p>
+                                        <p className="text-xs text-gray-500 mt-2">Total Reviews: {stats.totalReviews}</p>
+                                    </div>
+
+                                    <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-red-600">
+                                        <p className="text-gray-500 text-sm font-medium">System Status</p>
+                                        <p className="text-3xl font-bold text-green-600 mt-2">✓ Online</p>
+                                        <p className="text-xs text-gray-500 mt-2">Last updated: {new Date().toLocaleTimeString()}</p>
+                                    </div>
                                 </div>
                             </div>
-                        </div>
+                        )}
 
-                        {/* Total Clients Card */}
-                        <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-green-600">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-gray-500 text-sm font-medium">Total Clients</p>
-                                    <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalClients}</p>
+                        {/* Users Tab */}
+                        {activeTab === 'users' && (
+                            <div>
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="text-2xl font-bold text-gray-900">Users Management</h2>
+                                    <input
+                                        type="text"
+                                        placeholder="Search users..."
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                                    />
                                 </div>
-                                <div className="bg-green-100 rounded-full p-3">
-                                    <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5.581m0 0H9m0 0h5.581M9 21h0m0 0H5m0 0h0" />
-                                    </svg>
+
+                                <div className="bg-white shadow-lg rounded-lg overflow-hidden">
+                                    <table className="w-full">
+                                        <thead className="bg-gray-100 border-b border-gray-200">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Name</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Email</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Type</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Phone</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Status</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {filteredUsers.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan="6" className="px-6 py-4 text-center text-gray-500">No users found</td>
+                                                </tr>
+                                            ) : (
+                                                filteredUsers.map(user => (
+                                                    <tr key={user.id} className="border-b border-gray-200 hover:bg-gray-50">
+                                                        <td className="px-6 py-4 text-sm text-gray-900">{user.first_name} {user.last_name}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{user.email}</td>
+                                                        <td className="px-6 py-4 text-sm">
+                                                            <span className={`px-2 py-1 rounded text-xs font-medium ${user.user_type === 'worker' ? 'bg-blue-100 text-blue-800' :
+                                                                    user.user_type === 'client' ? 'bg-green-100 text-green-800' :
+                                                                        'bg-gray-100 text-gray-800'
+                                                                }`}>
+                                                                {user.user_type}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{user.phone_number || '—'}</td>
+                                                        <td className="px-6 py-4 text-sm">
+                                                            <span className={`px-2 py-1 rounded text-xs font-medium ${user.is_active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                                                                }`}>
+                                                                {user.is_active ? 'Active' : 'Inactive'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-sm">
+                                                            <button
+                                                                onClick={() => handleDeleteUser(user.id)}
+                                                                className="text-red-600 hover:text-red-900 font-medium"
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
-                        </div>
+                        )}
 
-                        {/* Total Jobs Card */}
-                        <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-purple-600">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-gray-500 text-sm font-medium">Total Jobs</p>
-                                    <p className="text-3xl font-bold text-gray-900 mt-2">{stats.totalJobs}</p>
+                        {/* Jobs Tab */}
+                        {activeTab === 'jobs' && (
+                            <div>
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="text-2xl font-bold text-gray-900">Jobs Management</h2>
+                                    <input
+                                        type="text"
+                                        placeholder="Search jobs..."
+                                        value={searchQuery}
+                                        onChange={(e) => setSearchQuery(e.target.value)}
+                                        className="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-600"
+                                    />
                                 </div>
-                                <div className="bg-purple-100 rounded-full p-3">
-                                    <svg className="w-8 h-8 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 13.255A23.931 23.931 0 0112 15c-3.728 0-7.333-.57-10.759-1.664m0 0a.5.5 0 00-.656.707A23.97 23.97 0 0012 21c3.728 0 7.333-.57 10.759-1.664m0 0a.5.5 0 00.656-.707M5.072 12.256h13.856" />
-                                    </svg>
+
+                                <div className="bg-white shadow-lg rounded-lg overflow-hidden">
+                                    <table className="w-full">
+                                        <thead className="bg-gray-100 border-b border-gray-200">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Title</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Category</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Budget</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Status</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Created</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Actions</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {filteredJobs.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan="6" className="px-6 py-4 text-center text-gray-500">No jobs found</td>
+                                                </tr>
+                                            ) : (
+                                                filteredJobs.map(job => (
+                                                    <tr key={job.id} className="border-b border-gray-200 hover:bg-gray-50">
+                                                        <td className="px-6 py-4 text-sm text-gray-900">{job.title}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{job.category}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{job.budget}</td>
+                                                        <td className="px-6 py-4 text-sm">
+                                                            <span className={`px-2 py-1 rounded text-xs font-medium ${job.status === 'active' ? 'bg-blue-100 text-blue-800' :
+                                                                    job.status === 'completed' ? 'bg-green-100 text-green-800' :
+                                                                        'bg-gray-100 text-gray-800'
+                                                                }`}>
+                                                                {job.status}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{new Date(job.created_at).toLocaleDateString()}</td>
+                                                        <td className="px-6 py-4 text-sm">
+                                                            <button
+                                                                onClick={() => handleDeleteJob(job.id)}
+                                                                className="text-red-600 hover:text-red-900 font-medium"
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
-                        </div>
+                        )}
 
-                        {/* Pending Verifications Card */}
-                        <div className="bg-white shadow-lg rounded-lg p-6 border-t-4 border-orange-600">
-                            <div className="flex items-center justify-between">
-                                <div>
-                                    <p className="text-gray-500 text-sm font-medium">Pending Verifications</p>
-                                    <p className="text-3xl font-bold text-gray-900 mt-2">{stats.pendingVerifications}</p>
-                                </div>
-                                <div className="bg-orange-100 rounded-full p-3">
-                                    <svg className="w-8 h-8 text-orange-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                                    </svg>
+                        {/* Applications Tab */}
+                        {activeTab === 'applications' && (
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-900 mb-6">Applications Management</h2>
+
+                                <div className="bg-white shadow-lg rounded-lg overflow-hidden">
+                                    <table className="w-full">
+                                        <thead className="bg-gray-100 border-b border-gray-200">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Job ID</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Worker ID</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Status</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Price</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Applied</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {applications.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan="5" className="px-6 py-4 text-center text-gray-500">No applications</td>
+                                                </tr>
+                                            ) : (
+                                                applications.map(app => (
+                                                    <tr key={app.id} className="border-b border-gray-200 hover:bg-gray-50">
+                                                        <td className="px-6 py-4 text-sm text-gray-900">{app.job_id.substring(0, 8)}...</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{app.worker_id.substring(0, 8)}...</td>
+                                                        <td className="px-6 py-4 text-sm">
+                                                            <span className={`px-2 py-1 rounded text-xs font-medium ${app.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                                                                    app.status === 'accepted' ? 'bg-green-100 text-green-800' :
+                                                                        'bg-red-100 text-red-800'
+                                                                }`}>
+                                                                {app.status}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{app.proposed_price}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{new Date(app.created_at).toLocaleDateString()}</td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
                                 </div>
                             </div>
-                        </div>
-                    </div>
-                ) : null}
+                        )}
 
-                {/* Quick Actions */}
-                <div className="mt-12">
-                    <h2 className="text-2xl font-bold text-gray-900 mb-6">Quick Actions</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                        <Link
-                            href="/admin/users"
-                            className="bg-white shadow-lg rounded-lg p-6 hover:shadow-xl transition text-center"
-                        >
-                            <svg className="w-12 h-12 text-blue-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.856-1.487M15 10a3 3 0 11-6 0 3 3 0 016 0zM6 20a6 6 0 1112 0v-2H6v2z" />
-                            </svg>
-                            <h3 className="font-bold text-gray-900">Manage Users</h3>
-                            <p className="text-sm text-gray-600 mt-2">View, edit, and manage user accounts</p>
-                        </Link>
+                        {/* Completions Tab */}
+                        {activeTab === 'completions' && (
+                            <div>
+                                <h2 className="text-2xl font-bold text-gray-900 mb-6">Job Completions Management</h2>
 
-                        <Link
-                            href="/admin/reviews"
-                            className="bg-white shadow-lg rounded-lg p-6 hover:shadow-xl transition text-center"
-                        >
-                            <svg className="w-12 h-12 text-yellow-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-                            </svg>
-                            <h3 className="font-bold text-gray-900">Manage Reviews</h3>
-                            <p className="text-sm text-gray-600 mt-2">Edit and delete user reviews</p>
-                        </Link>
-
-                        <button
-                            onClick={() => router.push('/admin/users?action=add')}
-                            className="bg-white shadow-lg rounded-lg p-6 hover:shadow-xl transition text-center hover:bg-gray-50"
-                        >
-                            <svg className="w-12 h-12 text-green-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
-                            </svg>
-                            <h3 className="font-bold text-gray-900">Add New User</h3>
-                            <p className="text-sm text-gray-600 mt-2">Create a new user account</p>
-                        </button>
-
-                        <button
-                            onClick={fetchStats}
-                            className="bg-white shadow-lg rounded-lg p-6 hover:shadow-xl transition text-center hover:bg-gray-50"
-                        >
-                            <svg className="w-12 h-12 text-orange-600 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                            </svg>
-                            <h3 className="font-bold text-gray-900">Refresh Stats</h3>
-                            <p className="text-sm text-gray-600 mt-2">Update dashboard statistics</p>
-                        </button>
-                    </div>
-                </div>
+                                <div className="bg-white shadow-lg rounded-lg overflow-hidden">
+                                    <table className="w-full">
+                                        <thead className="bg-gray-100 border-b border-gray-200">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Job ID</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Worker</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Status</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Final Price</th>
+                                                <th className="px-6 py-3 text-left text-sm font-medium text-gray-900">Completed</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {completions.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan="5" className="px-6 py-4 text-center text-gray-500">No completions</td>
+                                                </tr>
+                                            ) : (
+                                                completions.map(completion => (
+                                                    <tr key={completion.id} className="border-b border-gray-200 hover:bg-gray-50">
+                                                        <td className="px-6 py-4 text-sm text-gray-900">{completion.job_id.substring(0, 8)}...</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{completion.worker_id.substring(0, 8)}...</td>
+                                                        <td className="px-6 py-4 text-sm">
+                                                            <span className={`px-2 py-1 rounded text-xs font-medium ${completion.status === 'completed' ? 'bg-yellow-100 text-yellow-800' :
+                                                                    completion.status === 'confirmed' ? 'bg-green-100 text-green-800' :
+                                                                        'bg-red-100 text-red-800'
+                                                                }`}>
+                                                                {completion.status}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{completion.final_price}</td>
+                                                        <td className="px-6 py-4 text-sm text-gray-600">{new Date(completion.created_at).toLocaleDateString()}</td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+                    </>
+                )}
             </div>
         </div>
     )

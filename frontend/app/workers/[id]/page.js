@@ -1,10 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { useParams } from 'next/navigation'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import WorkerRatingsDisplay from '@/components/WorkerRatingsDisplay'
+
+// Lazy load the ratings component - loads after main profile is shown for faster initial load
+const WorkerRatingsDisplay = lazy(() => import('@/components/WorkerRatingsDisplay'))
 
 export default function WorkerProfilePage() {
     const params = useParams()
@@ -14,9 +16,15 @@ export default function WorkerProfilePage() {
     const [error, setError] = useState(null)
 
     useEffect(() => {
+        // If workerId is undefined, don't fetch yet
+        if (!workerId) {
+            return
+        }
+
         async function fetchWorker() {
             try {
                 setLoading(true)
+                setError(null)
 
                 const { data: workerData, error } = await supabase
                     .from('users')
@@ -36,8 +44,7 @@ export default function WorkerProfilePage() {
                         profile_picture,
                         completed_jobs,
                         rating,
-                        is_active,
-                        created_at
+                        is_active
                     `)
                     .eq('id', workerId)
                     .eq('user_type', 'worker')
@@ -56,9 +63,7 @@ export default function WorkerProfilePage() {
             }
         }
 
-        if (workerId) {
-            fetchWorker()
-        }
+        fetchWorker()
     }, [workerId])
 
     if (loading) {
@@ -273,10 +278,12 @@ export default function WorkerProfilePage() {
                         </div>
                     )}
 
-                    {/* Ratings Section */}
+                    {/* Ratings Section - Lazy Loaded */}
                     <div className="mb-8">
                         <h2 className="text-2xl font-bold text-gray-900 mb-4">Client Ratings & Feedback</h2>
-                        <WorkerRatingsDisplay workerId={worker.id} />
+                        <Suspense fallback={<div className="text-gray-500">Loading reviews...</div>}>
+                            <WorkerRatingsDisplay workerId={worker.id} />
+                        </Suspense>
                     </div>
                 </div>
             </div>
