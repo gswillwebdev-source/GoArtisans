@@ -136,17 +136,17 @@ export default function WorkerRatingsDisplay({ workerId }) {
                                     {rating.profile_picture ? (
                                         <img
                                             src={rating.profile_picture}
-                                            alt={rating.first_name}
+                                            alt={rating.client?.first_name || 'Client'}
                                             className="w-10 h-10 rounded-full object-cover"
                                         />
                                     ) : (
                                         <div className="w-10 h-10 rounded-full bg-indigo-200 flex items-center justify-center text-sm font-medium text-indigo-700">
-                                            {rating.first_name[0]}{rating.last_name[0]}
+                                            {(rating.client?.first_name)?.[0]}{(rating.client?.last_name)?.[0]}
                                         </div>
                                     )}
                                     <div>
                                         <p className="font-medium text-gray-900">
-                                            {rating.first_name} {rating.last_name}
+                                            {[rating.client?.first_name, rating.client?.last_name].filter(Boolean).join(' ') || 'Anonymous'}
                                         </p>
                                         <p className="text-xs text-gray-500">
                                             {new Date(rating.created_at).toLocaleDateString()}
@@ -169,8 +169,8 @@ export default function WorkerRatingsDisplay({ workerId }) {
                                     ))}
                                 </div>
                             </div>
-                            {rating.review && (
-                                <p className="text-sm text-gray-700 mt-2">{rating.review}</p>
+                            {rating.comment && (
+                                <p className="text-sm text-gray-700 mt-2">{rating.comment}</p>
                             )}
                             {rating.job_title && (
                                 <p className="text-xs text-gray-500 mt-2">For job: <span className="font-medium">{rating.job_title}</span></p>

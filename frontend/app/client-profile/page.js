@@ -54,6 +54,8 @@ export default function ClientProfilePage() {
     const [jobApplicants, setJobApplicants] = useState({}) // Job ID -> Array of applicants
     const [applicantsLoading, setApplicantsLoading] = useState(false)
     const [applicantsError, setApplicantsError] = useState(null)
+    const [applicationOperationError, setApplicationOperationError] = useState(null)
+    const [completionOperationError, setCompletionOperationError] = useState(null)
     const [showApplicants, setShowApplicants] = useState(true)
     const [emailVerificationCode, setEmailVerificationCode] = useState('')
     const [verifyingEmail, setVerifyingEmail] = useState(false)
@@ -559,6 +561,7 @@ export default function ClientProfilePage() {
     const handleUpdateApplicationStatus = async (appId, newStatus) => {
         try {
             setUpdatingAppId(appId)
+            setApplicationOperationError(null)
 
             const { error } = await supabase
                 .from('applications')
@@ -577,7 +580,9 @@ export default function ClientProfilePage() {
             setJobApplicants(updatedApplicants)
         } catch (err) {
             console.error('Failed to update application status', err)
-            alert(`Failed to ${newStatus} application: ${err.message}`)
+            setApplicationOperationError(`Failed to ${newStatus} application: ${err.message}`)
+            const id = setTimeout(() => setApplicationOperationError(null), 5000)
+            timeoutsRef.current.push(id)
         } finally {
             setUpdatingAppId(null)
         }
@@ -668,6 +673,7 @@ export default function ClientProfilePage() {
     const handleConfirmCompletion = async (completionId) => {
         try {
             setProcessingCompletionId(completionId)
+            setCompletionOperationError(null)
             await completionClient.confirmCompletion(completionId)
             // Find the job by searching through jobs with this completion
             const job = jobs.find(j => j.completions && j.completions.some(c => c.id === completionId))
@@ -684,8 +690,14 @@ export default function ClientProfilePage() {
             const id1 = setTimeout(() => setUpdateSuccess(false), 3000)
             timeoutsRef.current.push(id1)
         } catch (err) {
-            setUpdateError(err.message || 'Failed to confirm completion')
-            const id2 = setTimeout(() => setUpdateError(null), 3000)
+            console.error('Completion confirmation failed:', err)
+            const errorMsg = err.message || 'Failed to confirm completion'
+            setCompletionOperationError(errorMsg)
+            setUpdateError(errorMsg)
+            const id2 = setTimeout(() => {
+                setCompletionOperationError(null)
+                setUpdateError(null)
+            }, 5000)
             timeoutsRef.current.push(id2)
         } finally {
             setProcessingCompletionId(null)
@@ -757,6 +769,52 @@ export default function ClientProfilePage() {
     return (
         <div className="min-h-screen bg-gray-50 py-12">
             <div className="max-w-4xl mx-auto">
+                {/* Main Error Alert */}
+                {error && (
+                    <div className="bg-red-50 border-l-4 border-red-400 p-4 mb-6 rounded-r">
+                        <div className="flex items-start">
+                            <div className="flex-shrink-0">
+                                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                </svg>
+                            </div>
+                            <div className="ml-3 flex-1">
+                                <h3 className="text-sm font-medium text-red-800">{t('error') || 'Error'}</h3>
+                                <p className="text-sm text-red-700 mt-2">{error}</p>
+                            </div>
+                            <button
+                                onClick={() => setError(null)}
+                                className="ml-3 text-red-600 hover:text-red-800 text-sm font-medium"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Timeout Warning Alert */}
+                {timeoutWarning && !error && (
+                    <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 mb-6 rounded-r">
+                        <div className="flex items-start">
+                            <div className="flex-shrink-0">
+                                <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                </svg>
+                            </div>
+                            <div className="ml-3 flex-1">
+                                <h3 className="text-sm font-medium text-yellow-800">{t('loadingTakingLong') || 'Taking longer than expected'}</h3>
+                                <p className="text-sm text-yellow-700 mt-2">The page is taking longer to load. Please wait or refresh the page.</p>
+                            </div>
+                            <button
+                                onClick={() => setTimeoutWarning(false)}
+                                className="ml-3 text-yellow-600 hover:text-yellow-800 text-sm font-medium"
+                            >
+                                ✕
+                            </button>
+                        </div>
+                    </div>
+                )}
+
                 {/* Header */}
                 <div className="bg-white shadow rounded-lg p-8 mb-6">
                     <div className="flex justify-between items-start mb-6">
@@ -775,14 +833,45 @@ export default function ClientProfilePage() {
                     </div>
 
                     {updateSuccess && (
-                        <div className="bg-green-50 text-green-600 p-3 rounded-lg mb-4">
-                            {t('profileUpdatedSuccess')}
+                        <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-r">
+                            <div className="flex items-start">
+                                <div className="flex-shrink-0">
+                                    <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                    </svg>
+                                </div>
+                                <div className="ml-3 flex-1">
+                                    <p className="text-sm text-green-800">{t('profileUpdatedSuccess')}</p>
+                                </div>
+                                <button
+                                    onClick={() => setUpdateSuccess(false)}
+                                    className="ml-3 text-green-600 hover:text-green-800 text-sm font-medium"
+                                >
+                                    ✕
+                                </button>
+                            </div>
                         </div>
                     )}
 
                     {updateError && (
-                        <div className="bg-red-50 text-red-600 p-3 rounded-lg mb-4">
-                            {updateError}
+                        <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-r mb-4">
+                            <div className="flex items-start">
+                                <div className="flex-shrink-0">
+                                    <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                                        <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                    </svg>
+                                </div>
+                                <div className="ml-3 flex-1">
+                                    <h3 className="text-sm font-medium text-red-800">{t('profileUpdateFailed') || 'Failed to update profile'}</h3>
+                                    <p className="text-sm text-red-700 mt-2">{updateError}</p>
+                                </div>
+                                <button
+                                    onClick={() => setUpdateError(null)}
+                                    className="ml-3 text-red-600 hover:text-red-800 text-sm font-medium"
+                                >
+                                    ✕
+                                </button>
+                            </div>
                         </div>
                     )}
 
@@ -1023,6 +1112,28 @@ export default function ClientProfilePage() {
                         <div className="bg-white shadow rounded-lg p-4 sm:p-8 mb-8">
                             <h2 className="text-lg sm:text-xl font-semibold mb-4 sm:mb-6">{t('activeProjectsCompletion')}</h2>
 
+                            {completionOperationError && (
+                                <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-r mb-4">
+                                    <div className="flex items-start">
+                                        <div className="flex-shrink-0">
+                                            <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                            </svg>
+                                        </div>
+                                        <div className="ml-3 flex-1">
+                                            <h3 className="text-sm font-medium text-red-800">Completion operation failed</h3>
+                                            <p className="text-sm text-red-700 mt-2">{completionOperationError}</p>
+                                        </div>
+                                        <button
+                                            onClick={() => setCompletionOperationError(null)}
+                                            className="ml-3 text-red-600 hover:text-red-800 text-sm font-medium"
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
                             {jobs.filter(job => job.completions && job.completions.length > 0).length === 0 ? (
                                 <div className="text-center py-8 sm:py-12">
                                     <div className="text-3xl sm:text-4xl mb-3 sm:mb-4">🔄</div>
@@ -1062,13 +1173,51 @@ export default function ClientProfilePage() {
                                 </button>
                             </div>
 
+                            {applicationOperationError && (
+                                <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-r mb-4">
+                                    <div className="flex items-start">
+                                        <div className="flex-shrink-0">
+                                            <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                            </svg>
+                                        </div>
+                                        <div className="ml-3 flex-1">
+                                            <h3 className="text-sm font-medium text-red-800">Application operation failed</h3>
+                                            <p className="text-sm text-red-700 mt-2">{applicationOperationError}</p>
+                                        </div>
+                                        <button
+                                            onClick={() => setApplicationOperationError(null)}
+                                            className="ml-3 text-red-600 hover:text-red-800 text-sm font-medium"
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
                             {showApplicants && (
                                 <>
                                     {applicantsLoading ? (
                                         <div className="text-center py-12">{t('loadingApplicants')}</div>
                                     ) : applicantsError ? (
-                                        <div className="bg-yellow-50 text-yellow-600 p-3 rounded mb-4">
-                                            {applicantsError}
+                                        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-r">
+                                            <div className="flex items-start">
+                                                <div className="flex-shrink-0">
+                                                    <svg className="h-5 w-5 text-yellow-400" viewBox="0 0 20 20" fill="currentColor">
+                                                        <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                                                    </svg>
+                                                </div>
+                                                <div className="ml-3 flex-1">
+                                                    <h3 className="text-sm font-medium text-yellow-800">Failed to load applicants</h3>
+                                                    <p className="text-sm text-yellow-700 mt-2">{applicantsError}</p>
+                                                </div>
+                                                <button
+                                                    onClick={() => setApplicantsError(null)}
+                                                    className="ml-3 text-yellow-600 hover:text-yellow-800 text-sm font-medium"
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
                                         </div>
                                     ) : Object.keys(jobApplicants).length === 0 ? (
                                         <div className="text-center py-12">
@@ -1188,7 +1337,7 @@ export default function ClientProfilePage() {
                                                     </div>
                                                     <div>
                                                         <span className="text-xs font-medium text-gray-600 uppercase">{t('completedOn')}</span>
-                                                        <p className="text-sm text-gray-900 mt-1">{new Date(completion.completion_date).toLocaleDateString()}</p>
+                                                        <p className="text-sm text-gray-900 mt-1">{completion.confirmed_at ? new Date(completion.confirmed_at).toLocaleDateString() : t('notYet')}</p>
                                                     </div>
                                                 </div>
                                             </div>
@@ -1382,14 +1531,48 @@ export default function ClientProfilePage() {
 
                             <form onSubmit={handleJobSubmit} className="p-6 space-y-6">
                                 {jobFormError && (
-                                    <div className="bg-red-50 text-red-600 p-3 rounded-lg">
-                                        {jobFormError}
+                                    <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-r">
+                                        <div className="flex items-start">
+                                            <div className="flex-shrink-0">
+                                                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                                                </svg>
+                                            </div>
+                                            <div className="ml-3 flex-1">
+                                                <h3 className="text-sm font-medium text-red-800">{editingJobId ? 'Failed to update project' : 'Failed to post project'}</h3>
+                                                <p className="text-sm text-red-700 mt-2">{jobFormError}</p>
+                                            </div>
+                                            <button
+                                                onClick={() => setJobFormError(null)}
+                                                type="button"
+                                                className="ml-3 text-red-600 hover:text-red-800 text-sm font-medium"
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
 
                                 {jobFormSuccess && (
-                                    <div className="bg-green-50 text-green-600 p-3 rounded-lg">
-                                        Project {editingJobId ? 'updated' : 'posted'} successfully!
+                                    <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-r">
+                                        <div className="flex items-start">
+                                            <div className="flex-shrink-0">
+                                                <svg className="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+                                                </svg>
+                                            </div>
+                                            <div className="ml-3 flex-1">
+                                                <h3 className="text-sm font-medium text-green-800">{editingJobId ? 'Project updated' : 'Project posted'}</h3>
+                                                <p className="text-sm text-green-700 mt-2">Project {editingJobId ? 'updated' : 'posted'} successfully!</p>
+                                            </div>
+                                            <button
+                                                onClick={() => setJobFormSuccess(false)}
+                                                type="button"
+                                                className="ml-3 text-green-600 hover:text-green-800 text-sm font-medium"
+                                            >
+                                                ✕
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
 

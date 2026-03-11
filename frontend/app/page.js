@@ -10,34 +10,10 @@ export default function Home() {
   const [isChecking, setIsChecking] = useState(true)
 
   useEffect(() => {
-    const checkAuth = () => {
-      const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null
-      const userData = typeof window !== 'undefined' ? localStorage.getItem('user') : null
-
-      if (token && userData) {
-        try {
-          const user = JSON.parse(userData)
-          // If user is logged in, redirect to their profile
-          if (user.userType === 'worker') {
-            router.push('/worker-profile')
-          } else if (user.userType === 'client') {
-            router.push('/client-profile')
-          } else {
-            // User has no role assigned yet
-            router.push('/choose-role')
-          }
-        } catch (e) {
-          console.error('Error parsing user data:', e)
-          setIsChecking(false)
-        }
-      } else {
-        // User is not logged in, show home page
-        setIsChecking(false)
-      }
-    }
-
-    checkAuth()
-  }, [router])
+    // Only show home page - no auto-login from localStorage
+    // Users must explicitly log in via the login page
+    setIsChecking(false)
+  }, [])
 
   if (isChecking) {
     return <div className="min-h-screen flex items-center justify-center">Loading...</div>

@@ -15,8 +15,20 @@ export default function Navbar() {
     const [languageDropdown, setLanguageDropdown] = useState(false)
 
     const handleLogout = async () => {
+        // Clear Supabase session
         await supabase.auth.signOut()
-        router.push('/login')
+
+        // Clear all auth-related localStorage data
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('token')
+            localStorage.removeItem('user')
+            localStorage.removeItem('adminToken')
+            localStorage.removeItem('adminUser')
+            // Keep language preference but clear auth data
+        }
+
+        // Redirect to home page (logged out state)
+        router.push('/')
     }
 
     // Helper function to determine if a link is active
@@ -107,35 +119,31 @@ export default function Navbar() {
                         </div>
 
                         {/* Auth Buttons */}
-                        {!authLoading ? (
-                            user ? (
-                                <div className="flex items-center space-x-2 pl-3 border-l border-gray-300">
-                                    {/* Logout Button */}
-                                    <button
-                                        onClick={handleLogout}
-                                        className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-red-600 hover:bg-red-50 transition border border-red-300 hover:border-red-500"
-                                    >
-                                        🚪 {t('logout')}
-                                    </button>
-                                </div>
-                            ) : (
-                                <div className="flex items-center space-x-2 pl-3 border-l border-gray-300">
-                                    <Link
-                                        href="/login"
-                                        className="px-4 py-2 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-100 transition"
-                                    >
-                                        {t('login')}
-                                    </Link>
-                                    <Link
-                                        href="/register"
-                                        className="px-4 py-2 rounded-lg text-white text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 transition"
-                                    >
-                                        {t('register')}
-                                    </Link>
-                                </div>
-                            )
+                        {user ? (
+                            <div className="flex items-center space-x-2 pl-3 border-l border-gray-300">
+                                {/* Logout Button */}
+                                <button
+                                    onClick={handleLogout}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-red-600 hover:bg-red-50 transition border border-red-300 hover:border-red-500"
+                                >
+                                    🚪 {t('logout')}
+                                </button>
+                            </div>
                         ) : (
-                            <div className="h-8 w-24 bg-gray-200 rounded animate-pulse"></div>
+                            <div className="flex items-center space-x-2 pl-3 border-l border-gray-300">
+                                <Link
+                                    href="/login"
+                                    className="px-4 py-2 rounded-lg text-sm font-semibold text-gray-700 hover:bg-gray-100 transition"
+                                >
+                                    {t('login')}
+                                </Link>
+                                <Link
+                                    href="/register"
+                                    className="px-4 py-2 rounded-lg text-white text-sm font-semibold bg-indigo-600 hover:bg-indigo-700 transition"
+                                >
+                                    {t('register')}
+                                </Link>
+                            </div>
                         )}
                     </div>
                 </div>

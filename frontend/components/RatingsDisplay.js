@@ -122,12 +122,12 @@ export default function RatingsDisplay({ userId }) {
                                         />
                                     ) : (
                                         <div className="w-10 h-10 rounded-full bg-indigo-200 flex items-center justify-center text-sm font-medium text-indigo-700">
-                                            {rating.first_name[0]}{rating.last_name[0]}
+                                            {rating.first_name?.[0]}{rating.last_name?.[0]}
                                         </div>
                                     )}
                                     <div>
                                         <p className="font-medium text-gray-900">
-                                            {rating.first_name} {rating.last_name}
+                                            {[rating.first_name, rating.last_name].filter(Boolean).join(' ') || 'Anonymous'}
                                         </p>
                                         <p className="text-xs text-gray-500">
                                             {new Date(rating.created_at).toLocaleDateString()}

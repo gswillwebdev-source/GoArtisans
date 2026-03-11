@@ -289,6 +289,48 @@ export default function WorkerProfilePage() {
         }
     }, [authLoading, user, t])
 
+    // Real-time subscription for application status changes
+    useEffect(() => {
+        if (!user?.id || loading) return
+
+        // Subscribe to applications changes for this worker
+        const applicationsSubscription = supabase
+            .channel(`applications-worker-${user.id}`)
+            .on(
+                'postgres_changes',
+                {
+                    event: '*',
+                    schema: 'public',
+                    table: 'applications',
+                    filter: `worker_id=eq.${user.id}`
+                },
+                (payload) => {
+                    const { status, job_id } = payload.new || {}
+
+                    if (!job_id || !status) return
+
+                    // Remove from all lists first
+                    setAppliedJobs(prev => prev.filter(app => app.id !== job_id))
+                    setPendingJobs(prev => prev.filter(app => app.id !== job_id))
+                    setFinishedJobs(prev => prev.filter(app => app.id !== job_id))
+
+                    // Add to appropriate list based on status
+                    if (status === 'pending') {
+                        setAppliedJobs(prev => [...prev, { ...payload.new, id: job_id }])
+                    } else if (status === 'accepted') {
+                        setPendingJobs(prev => [...prev, { ...payload.new, id: job_id }])
+                    } else if (status === 'completed') {
+                        setFinishedJobs(prev => [...prev, { ...payload.new, id: job_id }])
+                    }
+                }
+            )
+            .subscribe()
+
+        return () => {
+            applicationsSubscription?.unsubscribe()
+        }
+    }, [user?.id, loading])
+
     const handleInputChange = (e) => {
         const { name, value, type, checked } = e.target
         setFormData({
@@ -577,11 +619,10 @@ export default function WorkerProfilePage() {
                                 <button
                                     onClick={handleToggleAvailability}
                                     disabled={isAvailabilityToggling}
-                                    className={`px-4 py-2 rounded-lg font-semibold transition ${
-                                        profile?.is_active
+                                    className={`px-4 py-2 rounded-lg font-semibold transition ${profile?.is_active
                                             ? 'bg-green-600 text-white hover:bg-green-700'
                                             : 'bg-red-600 text-white hover:bg-red-700'
-                                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                                        } disabled:opacity-50 disabled:cursor-not-allowed`}
                                 >
                                     {isAvailabilityToggling ? `${t('loading')}...` : (profile?.is_active ? '✓ Active' : '✗ Inactive')}
                                 </button>
